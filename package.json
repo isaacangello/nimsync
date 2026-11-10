@@ -1,0 +1,27 @@
+{
+  "name": "nimsync",
+  "version": "0.1.0",
+  "description": "Sincroniza o catálogo NVIDIA NIM (build.nvidia.com) com a whitelist de modelos do OpenCode",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "nimsync": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "bun src/index.ts",
+    "check": "bun src/index.ts check",
+    "doctor": "bun src/index.ts doctor",
+    "typecheck": "bunx tsc --noEmit",
+    "release": "bun scripts/release.ts"
+  },
+  "dependencies": {
+    "ink": "^6.0.0",
+    "jsonc-parser": "^3.3.1",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}
