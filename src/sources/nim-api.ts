@@ -41,7 +41,9 @@ export async function probeChatModel(
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (res.ok) return "alive";
-    if (res.status === 404) return "gone";
+    // 404 = modelo não existe · 410 = end-of-life oficial da NVIDIA (o doctor
+    // mostrou: "reached its end of life") — ambos são mortes definitivas
+    if (res.status === 404 || res.status === 410) return "gone";
     // drena o corpo para liberar a conexão
     await res.text().catch(() => {});
     return "inconclusive";

@@ -27,7 +27,7 @@ export async function runDoctor(opts: CliOptions): Promise<number> {
   const provider = providers[cfg.providerId];
   const models = provider?.models ?? {};
   const ids = Object.keys(models).sort();
-  const timeoutMs = opts.timeoutMs ?? 45_000;
+  const timeoutMs = opts.timeoutMs ?? 60_000;
 
   console.log(`${C.bold}nimsync doctor${C.reset} — ${ids.length} modelo(s) em ${cfg.providerId} (timeout ${timeoutMs / 1000}s cada)`);
 

@@ -62,7 +62,7 @@ export async function loadContext(opts: CliOptions): Promise<SyncContext> {
           e.note = "sumiu do /v1/models; sondagem inconclusiva (fila/thinking) — NÃO removido automaticamente";
           diff.deprecating.push(e);
         } else {
-          e.note = "sumiu do /v1/models e a sondagem confirmou: sem resposta (404)";
+          e.note = "sumiu do /v1/models e a sondagem confirmou o fim (HTTP 410 Gone / 404)";
         }
       })
     );
