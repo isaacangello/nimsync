@@ -1,6 +1,10 @@
 // nimsync TUI — revisar e aplicar o report com checkboxes.
 // Teclas: ↑/↓ move · espaço marca/desmarca · a todos os novos · r todos os mortos
-//         c credencial (provider/dedicada) · enter aplica · q sai sem mudanças
+//         c credencial (provider/dedicada) · enter -> confirmação y/n · q sai
+//
+// SEGURANÇA (lição do incidente de 11/nov: um Enter desavisado aplicou tudo):
+//   - NADA vem pré-marcado: nem novos, nem remoção de mortos
+//   - Enter NÃO aplica direto: mostra o resumo e exige y/n explícito
 
 import React, { useState } from "react";
 import { render, Box, Text, useInput, useApp } from "ink";
@@ -26,11 +30,16 @@ function TuiApp({ ctx, opts, onDone }: Props) {
   const deads = removableRows(ctx.report);           // configurados mortos (404/410)
   const deprec = deprecatingConfigured(ctx.report);  // configurados deprecando
   const [cursor, setCursor] = useState(0);
-  const [selectedNew, setSelectedNew] = useState<Set<string>>(() => new Set(news.map((e) => e.id)));
-  const [removeDead, setRemoveDead] = useState(deads.length > 0);
+  // SEGURANÇA: nada vem pré-marcado — o usuário marca explicitamente o que quer
+  const [selectedNew, setSelectedNew] = useState<Set<string>>(new Set());
+  const [removeDead, setRemoveDead] = useState(false);
+  const [confirming, setConfirming] = useState(false); // enter -> resumo -> y/n
   const [dedicated, setDedicated] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const pendingAdds = news.filter((r) => selectedNew.has(r.id));
+  const pendingRemoves = removeDead ? deads.map((d) => d.id) : [];
 
   useInput(
     (
@@ -40,6 +49,30 @@ function TuiApp({ ctx, opts, onDone }: Props) {
       if (result || error) {
         exit();
         onDone(result ? 0 : 1);
+        return;
+      }
+      if (confirming) {
+        if (input === "y" || input === "Y" || key.return) {
+          try {
+            const cfg = readConfig(opts.config ?? defaultConfigPath(), opts.provider);
+            const adds: AddSpec[] = pendingAdds.map((e) => toSpec(e, dedicated));
+            if (adds.length === 0 && pendingRemoves.length === 0) {
+              setConfirming(false);
+              setError("nada selecionado");
+              return;
+            }
+            const res = applyConfigEdits(cfg.path, cfg, adds, pendingRemoves);
+            setResult(
+              `config atualizada (+${res.added.length} / -${res.removed.length})\nbackup: ${res.backup}\n` +
+                `rode: opencode service restart`
+            );
+          } catch (err) {
+            setError(String(err instanceof Error ? err.message : err));
+          }
+          setConfirming(false);
+        } else if (input === "n" || input === "N" || key.escape) {
+          setConfirming(false);
+        }
         return;
       }
       if (input === "q" || key.escape) {
@@ -66,24 +99,11 @@ function TuiApp({ ctx, opts, onDone }: Props) {
       } else if (input === "c") {
         setDedicated((v) => !v);
       } else if (key.return) {
-        try {
-          const cfg = readConfig(opts.config ?? defaultConfigPath(), opts.provider);
-          const adds: AddSpec[] = news
-            .filter((e) => selectedNew.has(e.id))
-            .map((e) => toSpec(e, dedicated));
-          const removes = removeDead ? deads.map((d) => d.id) : [];
-          if (adds.length === 0 && removes.length === 0) {
-            setError("nada selecionado");
-            return;
-          }
-          const res = applyConfigEdits(cfg.path, cfg, adds, removes);
-          setResult(
-            `config atualizada (+${res.added.length} / -${res.removed.length})\nbackup: ${res.backup}\n` +
-              `rode: opencode service restart`
-          );
-        } catch (err) {
-          setError(String(err instanceof Error ? err.message : err));
+        if (pendingAdds.length === 0 && pendingRemoves.length === 0) {
+          setError("nada selecionado — marque com espaço (ou a/r) antes de aplicar");
+          return;
         }
+        setConfirming(true);
       }
     }
   );
@@ -142,6 +162,17 @@ function TuiApp({ ctx, opts, onDone }: Props) {
         </Text>
       </Box>
 
+      {confirming && (
+        <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
+          <Text bold color="yellow">
+            CONFIRMAR aplicação?
+          </Text>
+          <Text>  adicionar: {pendingAdds.length ? pendingAdds.map((r) => r.id).join(", ") : "nenhum"}</Text>
+          <Text>  remover:   {pendingRemoves.length ? pendingRemoves.join(", ") : "nenhum"}</Text>
+          <Text dimColor>  (y) aplicar · (n) cancelar</Text>
+        </Box>
+      )}
+
       {error && (
         <Text color="red">{"\n"}erro: {error}</Text>
       )}
@@ -151,7 +182,7 @@ function TuiApp({ ctx, opts, onDone }: Props) {
 
       <Box marginTop={1}>
         <Text dimColor>
-          ↑/↓ move · espaço marca · a todos novos · r todos mortos · c credencial · enter aplica · q sai
+          ↑/↓ move · espaço marca · a todos novos · r todos mortos · c credencial · enter confirma · q sai
         </Text>
       </Box>
     </Box>
