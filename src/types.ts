@@ -28,35 +28,67 @@ export interface SiteModel {
   slug: string; // slug da URL, ex "glm-5-3-flash"
   url: string;  // https://build.nvidia.com/<publisher>/<slug>
   name?: string;
-  deprecationDays?: number; // presente quando há badge "Deprecation in Nd"
+  description?: string;          // descrição do card (ajuda a identificar chat)
+  freeEndpoint?: boolean;        // badge "Free Endpoint" — elegível ao trial (nominalmente)
+  downloadable?: boolean;        // badge "Downloadable" (container NIM)
+  deprecationDays?: number;      // badge "Deprecation in Nd"
 }
 
-export type DiffKind = "new" | "dead" | "deprecating" | "unknown" | "ok";
+/** De onde vem a informação principal da linha do relatório */
+export type Origin = "site+md" | "site" | "md" | "account" | "site-only";
 
-export interface DiffEntry {
-  id: string;            // modelID canônico (ex "z-ai/glm-5.3-flash")
+/** Status de vida, definido por SONDAGEM quando importa */
+export type RowStatus =
+  | "new-ready"      // novo, sondado vivo (pronto pra configurar)
+  | "alive"          // configurado e vivo
+  | "deprecating"    // aviso ativo (dias) ou sunset
+  | "dead"           // 404/410 confirmado por sondagem
+  | "inconclusive"   // sondagem não decidiu (fila/rede) — nunca age
+  | "notfree"        // card do site SEM Free Endpoint (container/download)
+  | "unverified"     // não sondado (ex.: só no models.dev)
+  | "nonchat";       // sem tool_call/reasoning (embeddings, rerank, visão…)
+
+export interface ModelRow {
+  id: string;                 // melhor ID conhecido (API confirmado ou slug)
+  apiId?: string;             // ID confirmado por sondagem, se difere do id
   name?: string;
-  kind: DiffKind;
+  origin: Origin;
+  configured: boolean;
+  status: RowStatus;
+  freeEndpoint?: boolean;
   deprecationDays?: number;
   deprecationSource?: "site" | "modelsdev";
+  description?: string;
   meta?: ModelsDevModel;
   url?: string;
   note?: string;
 }
 
-export interface Diff {
-  newModels: DiffEntry[];      // na conta + models.dev, fora da config (chat)
-  deadModels: DiffEntry[];     // na config, sumiram do /v1/models
-  deprecating: DiffEntry[];    // na config e com aviso de deprecação
-  unknown: DiffEntry[];        // na conta, sem metadados no models.dev
-  unchanged: string[];         // na config e saudáveis
+/** Relatório em 4 seções, na ordem de confiança da origem (pedido do usuário). */
+export interface Report {
+  freeEndpoint: ModelRow[];   // 1) site · Free Endpoint (sondados)
+  noFreeEndpoint: ModelRow[]; // 2) site · sem Free Endpoint (containers)
+  modelsdevOnly: ModelRow[];  // 3) catalogados sem card no site
+  rest: ModelRow[];           // 4) na conta, sem metadados de chat
+  stats: { probes: number; accountCount: number; metaCount: number; siteCount: number };
+}
+
+/** Ações extraíveis do relatório */
+export function addableRows(report: Report): ModelRow[] {
+  return report.freeEndpoint.filter((r) => r.status === "new-ready");
+}
+export function removableRows(report: Report): ModelRow[] {
+  return report.freeEndpoint.filter((r) => r.status === "dead" && r.configured);
+}
+export function deprecatingConfigured(report: Report): ModelRow[] {
+  return report.freeEndpoint.filter((r) => r.status === "deprecating" && r.configured);
 }
 
 export interface PlannedChange {
   action: "add" | "remove";
   id: string;
-  modelDef?: unknown; // definição a inserir no JSONC (só para "add")
-  credEnv?: string;   // env var da chave, se dedicada
+  modelDef?: unknown;
+  credEnv?: string;
   reason: string;
 }
 
@@ -70,4 +102,5 @@ export interface CliOptions {
   json?: boolean;
   timeoutMs?: number;
   restart?: boolean;
+  noProbe?: boolean;
 }

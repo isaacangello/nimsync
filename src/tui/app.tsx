@@ -1,4 +1,4 @@
-// nimsync TUI — revisar e aplicar o diff com checkboxes.
+// nimsync TUI — revisar e aplicar o report com checkboxes.
 // Teclas: ↑/↓ move · espaço marca/desmarca · a todos os novos · r todos os mortos
 //         c credencial (provider/dedicada) · enter aplica · q sai sem mudanças
 
@@ -8,7 +8,8 @@ import { applyConfigEdits, readConfig, defaultConfigPath, type AddSpec } from ".
 import { envNameForModel } from "../core/normalize";
 import { effortValues } from "../core/diff";
 import { loadContext } from "../core/context";
-import type { CliOptions, DiffEntry } from "../types";
+import { addableRows, removableRows, deprecatingConfigured } from "../types";
+import type { CliOptions, ModelRow } from "../types";
 import type { SyncContext as Ctx } from "../core/context";
 
 const MAX_LIST = 25;
@@ -21,16 +22,15 @@ interface Props {
 
 function TuiApp({ ctx, opts, onDone }: Props) {
   const { exit } = useApp();
+  const news = addableRows(ctx.report);              // novos prontos (sondagem OK)
+  const deads = removableRows(ctx.report);           // configurados mortos (404/410)
+  const deprec = deprecatingConfigured(ctx.report);  // configurados deprecando
   const [cursor, setCursor] = useState(0);
-  const [selectedNew, setSelectedNew] = useState<Set<string>>(
-    () => new Set(ctx.diff.newModels.map((e) => e.id))
-  );
-  const [removeDead, setRemoveDead] = useState(ctx.diff.deadModels.length > 0);
+  const [selectedNew, setSelectedNew] = useState<Set<string>>(() => new Set(news.map((e) => e.id)));
+  const [removeDead, setRemoveDead] = useState(deads.length > 0);
   const [dedicated, setDedicated] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const news = ctx.diff.newModels;
 
   useInput(
     (
@@ -66,13 +66,12 @@ function TuiApp({ ctx, opts, onDone }: Props) {
       } else if (input === "c") {
         setDedicated((v) => !v);
       } else if (key.return) {
-        // aplicar
         try {
           const cfg = readConfig(opts.config ?? defaultConfigPath(), opts.provider);
           const adds: AddSpec[] = news
             .filter((e) => selectedNew.has(e.id))
             .map((e) => toSpec(e, dedicated));
-          const removes = removeDead ? ctx.diff.deadModels.map((d) => d.id) : [];
+          const removes = removeDead ? deads.map((d) => d.id) : [];
           if (adds.length === 0 && removes.length === 0) {
             setError("nada selecionado");
             return;
@@ -95,17 +94,18 @@ function TuiApp({ ctx, opts, onDone }: Props) {
         nimsync — NVIDIA NIM × {ctx.configPath}
       </Text>
       <Text dimColor>
-        conta: {ctx.accountCount} · models.dev: {ctx.metaCount} · site: {ctx.siteCount} cards
+        conta: {ctx.report.stats.accountCount} · models.dev: {ctx.report.stats.metaCount} · site:{" "}
+        {ctx.report.stats.siteCount} cards · sondagens: {ctx.report.stats.probes}
       </Text>
 
       <Text bold color="green">
-        {"\n"}NOVOS ({selectedNew.size}/{news.length} marcados):
+        {"\n"}NOVOS prontos ({selectedNew.size}/{news.length} marcados):
       </Text>
       {news.length === 0 && <Text dimColor> nenhum</Text>}
-      {news.slice(0, MAX_LIST).map((e, i) => (
-        <Text key={e.id} color={i === cursor ? "cyan" : undefined}>
-          {i === cursor ? "❯" : " "} [{selectedNew.has(e.id) ? "x" : " "}] {e.id}
-          <Text dimColor> [{effortValues(e.meta).join("/") || "sem effort"}]</Text>
+      {news.slice(0, MAX_LIST).map((r, i) => (
+        <Text key={r.id} color={i === cursor ? "cyan" : undefined}>
+          {i === cursor ? "❯" : " "} [{selectedNew.has(r.id) ? "x" : " "}] {r.id}
+          <Text dimColor> [{effortValues(r.meta).join("/") || "sem effort"}]</Text>
         </Text>
       ))}
       {news.length > MAX_LIST && (
@@ -113,11 +113,11 @@ function TuiApp({ ctx, opts, onDone }: Props) {
       )}
 
       <Text bold color="red">
-        {"\n"}MORTOS ({ctx.diff.deadModels.length}):
+        {"\n"}MORTOS — sondagem confirmou ({deads.length}):
       </Text>
-      {ctx.diff.deadModels.length === 0 && <Text dimColor> nenhum</Text>}
-      {ctx.diff.deadModels.map((d) => (
-        <Text key={d.id}>
+      {deads.length === 0 && <Text dimColor> nenhum</Text>}
+      {deads.map((d) => (
+        <Text key={d.id} color="red">
           {" "}  [{removeDead ? "x" : " "}] {d.id} <Text dimColor>— {d.note}</Text>
         </Text>
       ))}
@@ -125,8 +125,8 @@ function TuiApp({ ctx, opts, onDone }: Props) {
       <Text bold color="yellow">
         {"\n"}DEPRECANDO:
       </Text>
-      {ctx.diff.deprecating.length === 0 && <Text dimColor> nenhum</Text>}
-      {ctx.diff.deprecating.map((d) => (
+      {deprec.length === 0 && <Text dimColor> nenhum</Text>}
+      {deprec.map((d) => (
         <Text key={d.id} color="yellow">
           {" "}  ~ {d.id}
           <Text dimColor>
@@ -146,9 +146,7 @@ function TuiApp({ ctx, opts, onDone }: Props) {
         <Text color="red">{"\n"}erro: {error}</Text>
       )}
       {result && (
-        <Box flexDirection="column">
-          <Text color="green">{"\n"}✓ {result}</Text>
-        </Box>
+        <Text color="green">{"\n"}✓ {result}</Text>
       )}
 
       <Box marginTop={1}>
@@ -160,14 +158,14 @@ function TuiApp({ ctx, opts, onDone }: Props) {
   );
 }
 
-function toSpec(e: DiffEntry, dedicated: boolean): AddSpec {
+function toSpec(r: ModelRow, dedicated: boolean): AddSpec {
   return {
-    id: e.id,
-    name: e.name,
-    context: e.meta?.limit?.context,
-    output: e.meta?.limit?.output,
-    variants: effortValues(e.meta),
-    credEnv: dedicated ? envNameForModel(e.id) : undefined,
+    id: r.apiId ?? r.id,
+    name: r.name,
+    context: r.meta?.limit?.context,
+    output: r.meta?.limit?.output,
+    variants: effortValues(r.meta),
+    credEnv: dedicated ? envNameForModel(r.id) : undefined,
   };
 }
 

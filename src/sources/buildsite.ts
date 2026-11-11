@@ -29,6 +29,7 @@ function cachePath(): string {
 
 const H3_RE = /<h3[^>]*>\s*<a[^>]*?href="\/([^"<>]+)"[^>]*>([\s\S]*?)<\/a>\s*<\/h3>/g;
 const BADGE_RE = />Deprecation in (\d+)d</g;
+const DESC_RE = /<span[^>]*line-clamp-2[^>]*>([\s\S]*?)<\/span>/;
 
 function parseCards(html: string): SiteModel[] {
   const h3s: Array<{ index: number; path: string; name: string }> = [];
@@ -49,13 +50,23 @@ function parseCards(html: string): SiteModel[] {
   for (let i = 0; i < h3s.length; i++) {
     const h3 = h3s[i];
     const prevIndex = i === 0 ? -1 : h3s[i - 1].index;
-    // o badge vem ANTES do <h3> do próprio card e DEPOIS do <h3> anterior
-    const own = badges.filter((b) => b.index > prevIndex && b.index < h3.index).pop();
+    // janela ANTES do h3: cabeçalho do card (publisher + badges)
+    const beforeStart = prevIndex < 0 ? Math.max(0, h3.index - 1200) : prevIndex;
+    const before = html.slice(beforeStart, h3.index);
+    const own = badges.filter((b) => b.index > beforeStart && b.index < h3.index).pop();
+    // descrição: span "line-clamp-2" logo APÓS o </h3> do card
+    const after = html.slice(h3.index, i + 1 < h3s.length ? h3s[i + 1].index : h3.index + 3000);
+    const descMatch = after.match(DESC_RE);
+    const [publisher, slug] = h3.path.split("/");
+    if (!publisher || !slug) continue;
     cards.push({
-      publisher: h3.path.split("/")[0],
-      slug: h3.path.split("/")[1],
+      publisher,
+      slug,
       url: `https://build.nvidia.com/${h3.path}`,
       name: h3.name || undefined,
+      description: descMatch ? descMatch[1].replace(/<[^>]+>/g, "").trim() || undefined : undefined,
+      freeEndpoint: before.includes("Free Endpoint"),
+      downloadable: before.includes("Downloadable"),
       deprecationDays: own?.days,
     });
   }

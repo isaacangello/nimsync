@@ -13,15 +13,18 @@ import { configuredModels, applyConfigEdits, previewEdits, type AddSpec } from "
 import { envNameForModel } from "../core/normalize";
 import { loadContext, C } from "../core/context";
 import { effortValues } from "../core/diff";
-import type { CliOptions } from "../types";
+import { addableRows, removableRows, deprecatingConfigured } from "../types";
+import type { CliOptions, ModelRow } from "../types";
+
 
 export async function runUpdate(opts: CliOptions): Promise<number> {
   const ctx = await loadContext(opts);
-  const { diff } = ctx;
+  const { report } = ctx;
   const interactive = Boolean(stdin.isTTY) && !opts.yes && !opts.json;
 
-  const plannedRemoves = diff.deadModels.map((d) => d.id);
-  let plannedAdds: AddSpec[] = diff.newModels.map((e) => toAddSpec(e.id, e, opts));
+  const plannedRemoves = removableRows(report).map((r) => r.id);
+  let plannedAdds: AddSpec[] = addableRows(report).map((r) => toAddSpec(r, opts));
+  const deprecating = deprecatingConfigured(report);
 
   // ---- decisão: remover mortos
   if (plannedRemoves.length > 0) {
@@ -31,8 +34,8 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
       console.error("há modelos a remover; use --yes para aceitar os defaults ou rode interativamente em um TTY");
       return 2;
     } else if (interactive) {
-      console.log(`${C.red}Modelos mortos (fora do /v1/models):${C.reset}`);
-      for (const d of diff.deadModels) console.log(`  - ${d.id} ${C.dim}— ${d.note ?? ""}${C.reset}`);
+      console.log(`${C.red}Modelos mortos (sondagem confirmou 404/410):${C.reset}`);
+      for (const r of removableRows(report)) console.log(`  - ${r.id} ${C.dim}— ${r.note ?? ""}${C.reset}`);
       const ans = await ask(`Remover ${plannedRemoves.length} modelo(s)? [S/n] `);
       if (/^n/i.test(ans)) plannedRemoves.length = 0;
     }
@@ -45,7 +48,7 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
     } else if (opts.yes) {
       plannedAdds = []; // --yes sem --all: conservador
     } else if (interactive) {
-      console.log(`${C.green}Novos modelos disponíveis:${C.reset}`);
+      console.log(`${C.green}Novos modelos disponíveis (Free Endpoint + sondagem OK):${C.reset}`);
       plannedAdds.forEach((s, i) =>
         console.log(`  ${i + 1}. ${s.id} ${C.dim}[${s.variants?.join("/") ?? "sem effort"}]${C.reset}`)
       );
@@ -69,13 +72,19 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
         );
         if (/^d/i.test(cred)) {
           spec.credEnv = envNameForModel(spec.id);
-          console.log(
-            `  ${C.dim}adicione ao ~/.zshrc:  export ${spec.credEnv}="nvapi-..."${C.reset}`
-          );
+          console.log(`  ${C.dim}adicione ao ~/.zshrc:  export ${spec.credEnv}="nvapi-..."${C.reset}`);
         }
       }
     } else if (opts.json) {
       // planeja com provider key
+    }
+  }
+
+  if (deprecating.length > 0 && !opts.json) {
+    console.log(`\n${C.yellow}Atenção — configurados deprecando (nenhuma ação automática):${C.reset}`);
+    for (const r of deprecating) {
+      const quando = r.deprecationDays != null ? `Deprecation in ${r.deprecationDays}d` : r.note ?? "";
+      console.log(`  ~ ${r.id} ${C.dim}— ${quando}${C.reset}`);
     }
   }
 
@@ -124,17 +133,13 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
   return 0;
 }
 
-function toAddSpec(
-  id: string,
-  entry: { name?: string; meta?: import("../types").ModelsDevModel },
-  _opts: CliOptions
-): AddSpec {
+function toAddSpec(row: ModelRow, _opts: CliOptions): AddSpec {
   return {
-    id,
-    name: entry.name,
-    context: entry.meta?.limit?.context,
-    output: entry.meta?.limit?.output,
-    variants: effortValues(entry.meta),
+    id: row.apiId ?? row.id, // ID confirmado por sondagem quando difere do slug
+    name: row.name,
+    context: row.meta?.limit?.context,
+    output: row.meta?.limit?.output,
+    variants: effortValues(row.meta),
   };
 }
 
