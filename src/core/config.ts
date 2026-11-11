@@ -73,7 +73,7 @@ export function configuredModels(cfg: OpencodeConfig): string[] {
 }
 
 export function makeBackup(path: string): string {
-  const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 15); // 20261110-1545
+  const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14); // 20261111094801
   const backup = `${path}.bak-nimsync-${ts}`;
   copyFileSync(path, backup);
   return backup;
