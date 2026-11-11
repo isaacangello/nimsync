@@ -6,6 +6,7 @@
 
 - TUI: nada vem pré-marcado (nem novos, nem remoção de mortos) e o Enter agora mostra um resumo e exige confirmação `y/n` — um Enter desavisado não modifica mais a config
 - Timestamp do backup sem ponto sobrando (`opencode.jsonc.bak-nimsync-<ts>`)
+- Banner e `--version` leem a versão do `package.json` no build (mostravam v0.1.0 fixo)
 
 ## [0.2.0] - 2026-11-11
 

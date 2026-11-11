@@ -11,7 +11,7 @@
 
 import type { CliOptions } from "./types";
 
-const VERSION = "0.1.0";
+import { version as VERSION } from "../package.json";
 
 const HELP = `nimsync v${VERSION} — catálogo NVIDIA NIM ↔ OpenCode
 
