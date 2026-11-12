@@ -12,9 +12,20 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 
 const kind = (process.argv[2] ?? "patch") as "patch" | "minor" | "major";
 if (!["patch", "minor", "major"].includes(kind)) {
-  console.error("uso: bun run release patch|minor|major");
+  console.error("uso: bun run release patch|minor|major [--changelog \"mudança 1; mudança 2\"]");
   process.exit(2);
 }
+// bullets do changelog/notas: --changelog "a; b; c"
+const cliIdx = process.argv.indexOf("--changelog");
+const bullets =
+  cliIdx >= 0 && process.argv[cliIdx + 1]
+    ? process.argv[cliIdx + 1]
+        .split(";")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
+const entryBullets =
+  bullets.length > 0 ? bullets.map((b) => `- ${b}`).join("\n") : "- (descreva as mudanças desta release)";
 
 function bump(version: string, k: "patch" | "minor" | "major"): string {
   const [x, y, z] = version.split(".").map(Number);
@@ -35,7 +46,7 @@ const changelogPath = new URL("../CHANGELOG.md", import.meta.url).pathname;
 const today = new Date().toISOString().slice(0, 10);
 let header = `# Changelog\n\nFormato baseado em https://keepachangelog.com/pt-BR/1.1.0/ e SemVer.\n`;
 if (existsSync(changelogPath)) header = readFileSync(changelogPath, "utf8");
-const entry = `## [${next}] - ${today}\n\n- ${kind === "major" ? "BREAKING: " : ""}(descreva as mudanças desta release)\n`;
+const entry = `## [${next}] - ${today}\n\n${entryBullets}\n`;
 if (header.includes("# Changelog")) {
   const afterHeader = header.indexOf("\n", header.indexOf("# Changelog")) + 1;
   writeFileSync(changelogPath, `${header.slice(0, afterHeader)}\n${entry}${header.slice(afterHeader)}`);
@@ -53,20 +64,27 @@ sh(`git add package.json CHANGELOG.md`);
 sh(`git commit -m "chore(release): v${next}"`);
 sh(`git tag "v${next}"`);
 
-// binários standalone
+// binários standalone — nomes VERSIONADOS (evita colisão de cache de CDN do
+// GitHub quando uma release é recriada com o mesmo nome de asset)
 mkdirSync("dist", { recursive: true });
+sh(`rm -f dist/nimsync-* dist/SHA256SUMS`);
 for (const target of ["bun-linux-x64", "bun-linux-arm64"]) {
   const arch = target.endsWith("x64") ? "x64" : "arm64";
-  sh(`bun build --compile --target=${target} --outfile dist/nimsync-linux-${arch} src/index.ts`);
+  sh(`bun build --compile --target=${target} --outfile dist/nimsync-${next}-linux-${arch} src/index.ts`);
 }
-sh(`cd dist && sha256sum nimsync-linux-* > SHA256SUMS`);
+sh(`cd dist && sha256sum nimsync-*-linux-* > SHA256SUMS`);
 sh(`git push origin main --tags`);
 
 // release no GitHub (se o repositório remoto existir)
 const remote = Bun.spawnSync(["bash", "-c", "git remote get-url origin"]).stdout.toString().trim();
 if (remote) {
+  if (bullets.length > 0) {
+    writeFileSync(new URL("../dist/NOTES.md", import.meta.url).pathname, `**v${next}**\n\n${entryBullets}\n`);
+  }
   sh(
-    `gh release create v${next} dist/nimsync-linux-x64 dist/nimsync-linux-arm64 dist/SHA256SUMS --title "v${next}" --notes "Veja CHANGELOG.md" --verify-tag`
+    `gh release create v${next} dist/nimsync-${next}-linux-x64 dist/nimsync-${next}-linux-arm64 dist/SHA256SUMS --title "v${next}" ${
+      bullets.length > 0 ? "--notes-file dist/NOTES.md" : '--notes "Veja CHANGELOG.md"'
+    } --verify-tag`
   );
   console.log(`\n✓ release v${next} publicada`);
 } else {
