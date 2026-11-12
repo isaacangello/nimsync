@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0] - 2026-11-12
+
+- marcador ' ·NIM' no nome de exibição dos modelos gerenciados — identificáveis e filtráveis no /models do OpenCode
+- novo comando nimsync list (origem dos modelos, offline)
+- proveniência em ~/.local/state/nimsync/managed.json (respeita renomeação manual)
+- assets da release versionados para evitar colisão de cache de CDN
+
 ## [0.2.1] - 2026-11-11
 
 ### Corrigido
