@@ -8,6 +8,7 @@
 import { applyEdits, modify, parse, type FormattingOptions } from "jsonc-parser";
 import { copyFileSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
+import { addMarker, recordManaged, unrecordManaged } from "./managed";
 
 export interface OpencodeConfig {
   path: string;
@@ -91,7 +92,7 @@ export interface AddSpec {
 export function buildModelDef(spec: AddSpec, providerBaseURL: string | undefined): Record<string, unknown> {
   const def: Record<string, unknown> = {
     modelID: spec.id,
-    name: spec.name ?? spec.id,
+    name: addMarker(spec.name ?? spec.id), // marcador identifica modelos gerenciados no /models do OpenCode
   };
   if (spec.credEnv) {
     const settings: Record<string, string> = { apiKey: `{env:${spec.credEnv}}` };
@@ -161,7 +162,61 @@ export function applyConfigEdits(
     throw new Error(`validação falhou (${problems.join("; ")}) — config restaurada do backup`);
   }
   writeFileSync(path, text);
+  // proveniência: registra adds / esquece removes (só depois da escrita validada)
+  // entry.name = nome BASE (sem marcador) — a exibição é base + NAME_MARKER
+  for (const spec of adds) recordManaged(spec.id, spec.name ?? spec.id, "add");
+  for (const r of removes) unrecordManaged(r);
   return { backup, added: adds.map((a) => a.id), removed: removes };
+}
+
+/** Mapa id → nome de exibição atual dos modelos configurados no provider. */
+export function configuredNames(cfg: OpencodeConfig): Record<string, string> {
+  const providers = cfg.data.providers as Record<string, { models?: Record<string, { name?: string }> }>;
+  const models = providers?.[cfg.providerId]?.models ?? {};
+  const out: Record<string, string> = {};
+  for (const [id, m] of Object.entries(models)) out[id] = m?.name ?? id;
+  return out;
+}
+
+export interface RenameResult {
+  backup: string;
+  renamed: Array<{ id: string; name: string }>;
+}
+
+/**
+ * Renomeia o campo `name` de modelos existentes — uma escrita, um backup,
+ * validação de cada valor e rollback automático em caso de falha.
+ */
+export function applyNameRenames(
+  path: string,
+  cfg: OpencodeConfig,
+  renames: Array<{ id: string; name: string }>
+): RenameResult | null {
+  if (renames.length === 0) return null;
+  const backup = makeBackup(path);
+  let text = cfg.text;
+  const modelsPath = ["providers", cfg.providerId, "models"];
+  for (const r of renames) {
+    const edits = modify(text, [...modelsPath, r.id, "name"], r.name, { formattingOptions: FORMATTING });
+    text = applyEdits(text, edits);
+  }
+  // validação: parseia e confere nome por nome
+  const after = parse(text) as Record<string, unknown> | undefined;
+  const modelsAfter = (after?.providers as Record<string, { models?: Record<string, { name?: string }> }>)?.[
+    cfg.providerId
+  ]?.models as Record<string, { name?: string }> | undefined;
+  const problems: string[] = [];
+  if (!after || !modelsAfter) {
+    problems.push("JSONC resultante não parseou");
+  } else {
+    for (const r of renames) if (modelsAfter[r.id]?.name !== r.name) problems.push(`${r.id} não renomeou`);
+  }
+  if (problems.length > 0) {
+    renameSync(backup, path);
+    throw new Error(`validação de renome falhou (${problems.join("; ")}) — config restaurada do backup`);
+  }
+  writeFileSync(path, text);
+  return { backup, renamed: renames };
 }
 
 /** Só para testes: aplica em memória e devolve o texto (usado pelo --dry-run). */

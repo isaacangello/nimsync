@@ -2,6 +2,8 @@
 // exit 0 = nada a fazer | 1 = há mudanças pendentes | 2 = erro
 
 import { formatReport, loadContext, C } from "../core/context";
+import { readConfig, configuredModels } from "../core/config";
+import { allManaged } from "../core/managed";
 import { addableRows, removableRows, deprecatingConfigured } from "../types";
 import type { CliOptions } from "../types";
 
@@ -16,6 +18,18 @@ export async function runCheck(opts: CliOptions): Promise<number> {
     console.log(`  ${C.yellow}!${C.reset} site em modo degradado (SSR variou — parte dos cards veio do fallback RSC, sem badges)`);
   }
   console.log(`  ${C.dim}sondagens nesta execução: ${ctx.report.stats.probes}${C.reset}`);
+  // proveniência (offline)
+  try {
+    const cfg = readConfig(opts.config ?? `${process.env.HOME}/.config/opencode/opencode.jsonc`, opts.provider);
+    const configured = configuredModels(cfg);
+    const managedIds = new Set(allManaged().map(([id]) => id));
+    const managedConfigured = configured.filter((id) => managedIds.has(id)).length;
+    console.log(
+      `  ${C.dim}${managedConfigured}/${configured.length} configurados gerenciados pelo nimsync (nimsync list)${C.reset}`
+    );
+  } catch {
+    // proveniência é informativa — nunca derruba o check
+  }
 
   if (opts.json) {
     console.log(JSON.stringify(ctx.report, null, 2));

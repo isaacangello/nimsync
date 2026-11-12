@@ -10,6 +10,7 @@
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { configuredModels, applyConfigEdits, previewEdits, type AddSpec } from "../core/config";
+import { seedFromConfigured, syncNameMarkers } from "../core/names";
 import { envNameForModel } from "../core/normalize";
 import { loadContext, C } from "../core/context";
 import { effortValues } from "../core/diff";
@@ -90,7 +91,22 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
 
   const total = plannedAdds.length + plannedRemoves.length;
   if (total === 0) {
-    console.log("nada a fazer — config já está em dia com as regras atuais");
+    if (opts.json) {
+      console.log(JSON.stringify({ adds: [], removes: [], renames: [] }, null, 2));
+      return 0;
+    }
+    // mesmo sem adds/removes, garante os marcadores " ·NIM" (migração idempotente)
+    const nameSync = syncNames(loadConfigForWrite(opts));
+    if (nameSync.renamed.length === 0) {
+      console.log("nada a fazer — config já está em dia com as regras atuais");
+      return 0;
+    }
+    console.log(
+      `${C.cyan}✦${C.reset} marcador " ·NIM" aplicado a ${nameSync.renamed.length} modelo(s) — backup: ${C.dim}${nameSync.backup}${C.reset}`
+    );
+    if (nameSync.manual.length > 0) {
+      console.log(`  ${C.dim}renomeações manuais respeitadas: ${nameSync.manual.join(", ")}${C.reset}`);
+    }
     return 0;
   }
 
@@ -127,10 +143,26 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
   if (plannedAdds.length > 0) {
     console.log(`  ${C.green}adicionados:${C.reset} ${result.added.join(", ")}`);
   }
+  // marca os gerenciados que faltam (inclui os recém-adicionados) — idempotente
+  const nameSync = syncNames(readConfig(cfg.path, cfg.providerId));
+  if (nameSync.renamed.length > 0) {
+    console.log(
+      `  ${C.cyan}✦${C.reset} marcador " ·NIM" aplicado a ${nameSync.renamed.length} modelo(s) — backup: ${C.dim}${nameSync.backup}${C.reset}`
+    );
+  }
+  if (nameSync.manual.length > 0) {
+    console.log(`  ${C.dim}renomeações manuais respeitadas: ${nameSync.manual.join(", ")}${C.reset}`);
+  }
   console.log(
     `\n${C.dim}próximo passo: ${C.reset}opencode service restart${C.dim} — o daemon resolve {env:...} na inicialização${C.reset}`
   );
   return 0;
+}
+
+/** semeia a proveniência dos configurados e garante os marcadores (uma escrita) */
+function syncNames(cfg: ReturnType<typeof readConfig>) {
+  seedFromConfigured(cfg);
+  return syncNameMarkers(cfg) ?? { renamed: [], manual: [] };
 }
 
 function toAddSpec(row: ModelRow, _opts: CliOptions): AddSpec {

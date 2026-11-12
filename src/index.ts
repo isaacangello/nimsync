@@ -4,6 +4,7 @@
 //   nimsync            TUI interativa (checkboxes, preview, aplicar)
 //   nimsync check      relatório de novos/mortos/deprecando (não escreve)
 //   nimsync update     aplica mudanças (backup automático; --yes/--all/--dry-run)
+//   nimsync list       modelos configurados com origem (✦ nimsync / · manual)
 //   nimsync doctor     testa cada modelo configurado com request mínima
 //
 // Flags: --config <path>  --provider <id>  --refresh  --yes  --all  --dry-run
@@ -22,6 +23,7 @@ COMANDOS
   tui (default)   painel interativo: revisar novos/mortos/deprecando e aplicar
   check           relatório no terminal; não escreve nada (exit 1 = pendências)
   update          aplica na config (backup automático + validação com rollback)
+  list            modelos configurados com origem (offline; não escreve)
   doctor          request mínima para cada modelo configurado (chave, latência, rota)
 
 FLAGS
@@ -84,6 +86,8 @@ async function main(): Promise<number> {
   switch (cmd) {
     case "check":
       return await import("./cli/check").then((m) => m.runCheck(opts));
+    case "list":
+      return await import("./cli/list").then((m) => m.runList(opts));
     case "update":
       return await import("./cli/update").then((m) => m.runUpdate(opts));
     case "doctor":
