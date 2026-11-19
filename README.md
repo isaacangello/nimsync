@@ -19,6 +19,14 @@ paru -S nimsync-bin
 # or: yay -S nimsync-bin
 ```
 
+### From npm (requires Bun)
+
+```bash
+npm install -g nimsync
+nimsync --version
+nimsync-stats --help
+```
+
 ### From source
 
 ```bash
@@ -40,6 +48,7 @@ ln -sf "$(pwd)/src/index.ts" ~/.local/bin/nimsync   # global command
 | `nimsync update --dry-run` | Previews the resulting configuration | no |
 | `nimsync list` | Shows configured model provenance and markers | no |
 | `nimsync doctor` | Minimal request per configured model (key, latency, route/alias) | no |
+| `nimsync-stats` | GitHub release downloads, repository stars/forks, and AUR adoption metrics | no |
 
 Flags: `--profile <nvidia|aihubmix>` · `--config <path>` · `--provider <id>` · `--refresh` · `--json` · `--dry-run` · `--timeout-ms <n>`. The default profile is `nvidia`; `--provider aihubmix` also infers the profile automatically.
 
@@ -62,6 +71,12 @@ The generated block uses:
 - `models: {}` initially
 
 Only IDs ending in `-free`/`:free` or models with `0/0` cost on models.dev are added automatically. Paid models appear outside the whitelist; a `403` caused by insufficient balance means **alive route, but paid**, never a dead model. Managed names receive ` ·MIX`; NVIDIA continues to use ` ·NIM`.
+
+### Adoption and download statistics
+
+Run `nimsync-stats` for a report of GitHub release downloads (total and per asset), repository stars/forks, and AUR votes/popularity/out-of-date status. Use `nimsync-stats --watch` to refresh every 60 seconds. This command requires `gh` (GitHub CLI), `jq`, and `curl`.
+
+From a source checkout, you can also run `bun run stats`.
 
 ## How decisions are made
 
@@ -105,6 +120,8 @@ See the [changelog](CHANGELOG.md) ([versão em português](CHANGELOG.pt-BR.md)).
 bun run release patch   # 0.1.0 -> 0.1.1: bump, tag, build, GitHub Release
 bun run release minor   # 0.1.0 -> 0.2.0
 ```
+
+Every `v*.*.*` tag also triggers `.github/workflows/publish-npm.yml`. The workflow installs dependencies, validates the code and tag version, inspects the package, and publishes it to npm with provenance using the repository's `NPM_TOKEN` secret. The tag and `package.json` versions must match.
 
 ## Development
 

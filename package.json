@@ -1,17 +1,48 @@
 {
   "name": "nimsync",
   "version": "0.4.0",
-  "description": "Sincroniza NVIDIA NIM e modelos gratuitos do AIHubMix com a whitelist do OpenCode",
+  "description": "Sync NVIDIA NIM and free AIHubMix models with the OpenCode model whitelist",
   "type": "module",
   "license": "MIT",
+  "homepage": "https://github.com/isaacangello/nimsync#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/isaacangello/nimsync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/isaacangello/nimsync/issues"
+  },
+  "keywords": [
+    "opencode",
+    "nvidia",
+    "aihubmix",
+    "bun",
+    "ai"
+  ],
+  "files": [
+    "src/",
+    "scripts/nimsync-stats.sh",
+    "README.md",
+    "README.pt-BR.md",
+    "CHANGELOG.md",
+    "CHANGELOG.pt-BR.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "bin": {
-    "nimsync": "./src/index.ts"
+    "nimsync": "src/index.ts",
+    "nimsync-stats": "scripts/nimsync-stats.sh"
   },
   "scripts": {
     "start": "bun src/index.ts",
     "check": "bun src/index.ts check",
     "doctor": "bun src/index.ts doctor",
+    "stats": "bash scripts/nimsync-stats.sh",
     "typecheck": "bunx tsc --noEmit",
+    "prepublishOnly": "bun run typecheck && bash -n scripts/nimsync-stats.sh",
     "release": "bun scripts/release.ts"
   },
   "dependencies": {

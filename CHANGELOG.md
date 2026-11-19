@@ -2,6 +2,13 @@
 
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `nimsync-stats` command with GitHub release downloads (total and per asset), repository stars/forks, AUR votes/popularity/out-of-date status, and a 60-second `--watch` mode
+- npm package metadata and a `v*.*.*` tag-triggered GitHub Actions workflow that validates and publishes the package with provenance using `NPM_TOKEN`
+
 ## [0.4.0] - 2026-11-19
 
 ### Added

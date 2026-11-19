@@ -19,6 +19,14 @@ paru -S nimsync-bin
 # ou: yay -S nimsync-bin
 ```
 
+### Pelo npm (requer Bun)
+
+```bash
+npm install -g nimsync
+nimsync --version
+nimsync-stats --help
+```
+
 ### Pelo código-fonte
 
 ```bash
@@ -40,6 +48,7 @@ ln -sf "$(pwd)/src/index.ts" ~/.local/bin/nimsync   # comando global
 | `nimsync update --dry-run` | prévia da config resultante | não |
 | `nimsync list` | origem e marcador dos modelos configurados | não |
 | `nimsync doctor` | request mínima por modelo configurado (chave, latência, rota/alias) | não |
+| `nimsync-stats` | downloads do GitHub Releases, stars/forks e métricas de adoção no AUR | não |
 
 Flags: `--profile <nvidia|aihubmix>` · `--config <path>` · `--provider <id>` · `--refresh` · `--json` · `--dry-run` · `--timeout-ms <n>`. O perfil default é `nvidia`; `--provider aihubmix` também infere o perfil automaticamente.
 
@@ -62,6 +71,12 @@ O bloco criado usa:
 - `models: {}` inicialmente
 
 Só entram automaticamente IDs terminados em `-free`/`:free` ou modelos com custo `0/0` no models.dev. Modelos pagos aparecem fora da whitelist; `403` por saldo insuficiente significa **rota viva, mas paga**, nunca modelo morto. Os nomes gerenciados recebem ` ·MIX`; NVIDIA continua com ` ·NIM`.
+
+### Estatísticas de adoção e downloads
+
+Execute `nimsync-stats` para ver downloads do GitHub Releases (total e por asset), stars/forks do repositório e votos/popularidade/out-of-date no AUR. Use `nimsync-stats --watch` para atualizar a cada 60 segundos. O comando requer `gh` (GitHub CLI), `jq` e `curl`.
+
+Em um checkout do código-fonte, você também pode usar `bun run stats`.
 
 ## Como decide
 
@@ -105,6 +120,8 @@ Consulte o [changelog em português](CHANGELOG.pt-BR.md) ([English version](CHAN
 bun run release patch   # 0.1.0 -> 0.1.1: bump, tag, build, GitHub Release
 bun run release minor   # 0.1.0 -> 0.2.0
 ```
+
+Toda tag `v*.*.*` também dispara `.github/workflows/publish-npm.yml`. O workflow instala as dependências, valida o código e a versão da tag, inspeciona o pacote e publica no npm com provenance usando o secret `NPM_TOKEN` do repositório. As versões da tag e do `package.json` precisam ser iguais.
 
 ## Desenvolvimento
 
