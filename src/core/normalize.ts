@@ -10,10 +10,10 @@ export function normKey(id: string): string {
     .join("/");
 }
 
-/** Sugerir nome de env var dedicada a partir do modelID: "z-ai/glm-5.3-flash" -> NVIDIA_KEY_Z_AI_GLM_5_3_FLASH */
-export function envNameForModel(id: string): string {
+/** Sugerir nome de env var dedicada: "z-ai/glm-5.3-flash" -> NVIDIA_KEY_Z_AI_GLM_5_3_FLASH. */
+export function envNameForModel(id: string, prefix = "NVIDIA_KEY_"): string {
   return (
-    "NVIDIA_KEY_" +
+    prefix +
     id
       .toUpperCase()
       .replace(/[^A-Z0-9]+/g, "_")

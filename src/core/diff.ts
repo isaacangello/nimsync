@@ -1,17 +1,17 @@
 // O coração (v2): descoberta = UNIÃO das fontes; veredito = SONDAGEM.
 //
 // Lições incorporadas:
-//   - /v1/models NÃO é autoritativo (omitia glm-5.3 vivo; não lista kimi-k3_1-pro)
-//   - badge "Free Endpoint" do site pode mentir (kimi-k3_1-pro: 404 no trial)
-//   - logo: todo candidato novo com Free Endpoint é sondado; 404/410 = morto,
-//     200 = pronto, timeout = inconclusivo (mostrado, nunca agido)
-//   - modelos CONFIGURADOS sempre aparecem no relatório, mesmo que tenham
-//     sumido de todas as fontes (fantasmas) — e são sondados para definir
-//     vivo × morto
+//   - /v1/models NÃO é autoritativo (NVIDIA omite modelos vivos; AIHubMix lista aposentados)
+//   - badge "Free Endpoint" do site pode mentir; ID "-free" também pode estar aposentado
+//   - todo candidato elegível é sondado quando a conta não é confiável; timeout/rede
+//     é inconclusivo (mostrado, nunca agido)
+//   - modelos CONFIGURADOS sempre aparecem no relatório, mesmo que tenham sumido
+//     de todas as fontes (fantasmas), e são sondados quando necessário
 
 import { normKey } from "./normalize";
+import { NVIDIA_PROFILE, type ProviderProfile } from "./profile";
 import type { ModelRow, ModelsDevModel, Report, SiteModel } from "../types";
-import { resolveSlugId } from "../sources/slugmap";
+import { probeChatModel, resolveSlugId, type ResolveResult } from "../sources/slugmap";
 
 export interface ReportInputs {
   configured: string[];
@@ -19,6 +19,7 @@ export interface ReportInputs {
   meta: Record<string, ModelsDevModel>;
   siteCards: SiteModel[];
   apiKey: string;
+  profile?: ProviderProfile;
   refresh?: boolean;
   noProbe?: boolean;
   timeoutMs?: number;
@@ -41,6 +42,8 @@ function looksNonChat(text?: string): boolean {
 }
 
 export async function computeReport(inputs: ReportInputs): Promise<Report> {
+  const profile = inputs.profile ?? NVIDIA_PROFILE;
+  const isAIHubMix = profile.name === "aihubmix";
   const meta = metaByNorm(inputs.meta);
   const accountSet = new Set(inputs.account.map(normKey));
   const cfgSet = new Set(inputs.configured.map(normKey));
@@ -54,7 +57,7 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
   const originOf = (hasSite: boolean, hasMd: boolean): ModelRow["origin"] =>
     hasSite && hasMd ? "site+md" : hasSite ? "site" : hasMd ? "md" : "account";
 
-  // ---------- 1) universo do SITE (fonte primária de descoberta)
+  // ---------- 1) universo do SITE (fonte primária de descoberta no NVIDIA)
   for (const card of inputs.siteCards) {
     const key = normKey(`${card.publisher}/${card.slug}`);
     const m = meta.get(key);
@@ -82,7 +85,6 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
     }
 
     if (configured) {
-      // vida dos configurados: está na conta? deprecando?
       if (!accountSet.has(key)) {
         base.status = "inconclusive"; // sondagem decide (lote 4a)
         base.note = "aguardando sondagem (fora do /v1/models)";
@@ -99,7 +101,6 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
       continue;
     }
 
-    // não configurado + Free Endpoint: candidato novo — sondagem decide
     base.status = "unverified";
     rows.set(key, base);
   }
@@ -110,37 +111,55 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
     if (rows.has(key)) continue;
     const m = meta.get(key);
     const configured = cfgSet.has(key);
+    const free = isAIHubMix ? profile.isFree(id, m) : undefined;
     const row: ModelRow = {
       id,
       name: m?.name,
       origin: m ? "md" : "account",
       configured,
       status: "unverified",
+      freeEndpoint: free,
       meta: m,
     };
-    if (!m) {
+
+    if (isAIHubMix) {
+      if (configured) {
+        row.status = "unverified";
+        row.note = "aguardando sondagem (a listagem da conta não garante a rota)";
+      } else if (!free) {
+        row.status = "notfree";
+        row.note = "modelo pago — listado na conta, mas fora da whitelist gratuita";
+      }
+      // gratuito não configurado fica unverified e será sondado, mesmo estando na conta
+    } else if (!m) {
       row.status = "nonchat";
       row.note = "na sua conta, sem metadados (provavelmente embedding/rerank/visão)";
-      rows.set(key, row);
     } else {
       row.status = configured ? "alive" : "unverified";
       row.note = configured ? undefined : "no models.dev, sem card no site — sonda antes de usar";
-      rows.set(key, row);
     }
+    rows.set(key, row);
   }
 
   // ---------- 3) models.dev sem card e sem presença na conta
   for (const [id, m] of Object.entries(inputs.meta)) {
     const key = normKey(id);
     if (rows.has(key)) continue;
+    const configured = cfgSet.has(key);
+    const free = isAIHubMix ? profile.isFree(id, m) : undefined;
     rows.set(key, {
       id,
       name: m.name,
       origin: "md",
-      configured: cfgSet.has(key),
-      status: "unverified",
+      configured,
+      status: isAIHubMix && !configured && !free ? "notfree" : "unverified",
+      freeEndpoint: free,
       meta: m,
-      note: "só no models.dev — sem card no site e fora do /v1/models",
+      note: isAIHubMix
+        ? free || configured
+          ? "gratuito no models.dev, fora do /v1/models — aguardando sondagem"
+          : "modelo pago no models.dev — fora da whitelist gratuita"
+        : "só no models.dev — sem card no site e fora do /v1/models",
     });
   }
 
@@ -153,11 +172,21 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
       origin: "account",
       configured: true,
       status: "inconclusive", // sondagem decide
+      freeEndpoint: isAIHubMix ? profile.isFree(id) : undefined,
       note: "na config, mas sumiu de site, conta e models.dev — aguardando sondagem",
     });
   }
 
-  // ---------- 5) sondagens (concurrencia 4)
+  const probeDirect = async (row: ModelRow): Promise<ResolveResult> => {
+    const verdict = await probeChatModel(inputs.apiKey, row.id, inputs.timeoutMs ?? 20_000, profile);
+    return {
+      apiId: verdict === "alive" || verdict === "alive-paid" ? row.id : undefined,
+      verdict,
+      probed: true,
+    };
+  };
+
+  // ---------- 5) sondagens (concorrência 4)
   let probes = 0;
   if (!inputs.noProbe) {
     const queue: Array<() => Promise<void>> = [];
@@ -167,53 +196,77 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
       if (row.configured && (row.status === "inconclusive" || row.status === "unverified")) {
         queue.push(async () => {
           probes++;
-          const s = slugOf(row.id);
-          const r = await resolveSlugId(s.publisher, s.slug, inputs.apiKey, {
-            knownId: accountSet.has(normKey(row.id)) ? row.id : undefined,
-            refresh: inputs.refresh,
-            timeoutMs: inputs.timeoutMs,
-          });
+          let r: ResolveResult;
+          if (isAIHubMix) {
+            r = await probeDirect(row);
+          } else {
+            const s = slugOf(row.id);
+            r = await resolveSlugId(s.publisher, s.slug, inputs.apiKey, {
+              knownId: accountSet.has(normKey(row.id)) ? row.id : undefined,
+              refresh: inputs.refresh,
+              timeoutMs: inputs.timeoutMs,
+              profile,
+            });
+          }
           if (r.verdict === "alive") {
-            row.status = row.deprecationDays != null ? "deprecating" : "alive";
-            if (row.note?.includes("sondagem")) row.note = undefined;
-            if (r.verdict === "alive" && !accountSet.has(normKey(row.id)) && row.status === "alive") {
+            row.status = row.deprecationDays != null || (isAIHubMix && row.meta?.status === "deprecated") ? "deprecating" : "alive";
+            if (isAIHubMix && row.meta?.status === "deprecated") row.deprecationSource = "modelsdev";
+            if (row.note?.includes("sondagem") || row.note?.includes("listagem")) row.note = undefined;
+            if (!accountSet.has(normKey(row.id)) && row.status === "alive") {
               row.status = "deprecating";
               row.note = "fora do /v1/models mas AINDA RESPONDE (sunset) — remova só quando parar";
             }
+          } else if (r.verdict === "alive-paid") {
+            row.status = "paid";
+            row.note = "rota existe, mas respondeu 403 por saldo insuficiente — NÃO é modelo morto";
           } else if (r.verdict === "gone") {
             row.status = "dead";
-            row.note = "sondagem confirmou o fim (HTTP 410 Gone / 404)";
+            row.note = isAIHubMix
+              ? "sondagem confirmou model_retired/no_available_channel"
+              : "sondagem confirmou o fim (HTTP 410 Gone / 404)";
           } else {
             row.status = "deprecating";
-            row.note = "sondagem inconclusiva (fila/thinking) — NÃO removido automaticamente";
+            row.note = "sondagem inconclusiva (fila/thinking/rede) — NÃO removido automaticamente";
           }
         });
       }
     }
 
-    // 5b. novos candidatos com Free Endpoint (fora da conta) — sondar + filtrar chat
+    // 5b. novos candidatos gratuitos — sondar + filtrar chat
     for (const row of rows.values()) {
       if (!row.configured && row.freeEndpoint && row.status === "unverified") {
         queue.push(async () => {
-          if (accountSet.has(normKey(row.id))) {
+          if (accountSet.has(normKey(row.id)) && !profile.probeAccountCandidates) {
             markChatWorthiness(row);
             if (row.status === "unverified") row.status = "new-ready";
             return;
           }
           probes++;
-          const s = slugOf(row.id);
-          const r = await resolveSlugId(s.publisher, s.slug, inputs.apiKey, {
-            knownId: row.meta?.id,
-            refresh: inputs.refresh,
-            timeoutMs: inputs.timeoutMs,
-          });
+          let r: ResolveResult;
+          if (isAIHubMix) {
+            r = await probeDirect(row);
+          } else {
+            const s = slugOf(row.id);
+            r = await resolveSlugId(s.publisher, s.slug, inputs.apiKey, {
+              knownId: row.meta?.id,
+              refresh: inputs.refresh,
+              timeoutMs: inputs.timeoutMs,
+              profile,
+            });
+          }
           if (r.verdict === "alive") {
             if (r.apiId && normKey(r.apiId) !== normKey(row.id)) row.apiId = r.apiId;
             markChatWorthiness(row);
             if (row.status === "unverified") row.status = "new-ready";
+          } else if (r.verdict === "alive-paid") {
+            row.status = "notfree";
+            row.freeEndpoint = false;
+            row.note = "rota existe, mas exige saldo (403) — não entra na whitelist gratuita";
           } else if (r.verdict === "gone") {
             row.status = "dead";
-            row.note = "badge Free Endpoint, mas o endpoint responde 404/410 — não utilizável (ainda)";
+            row.note = isAIHubMix
+              ? "ID gratuito listado, mas aposentado/sem canal — não utilizável"
+              : "badge Free Endpoint, mas o endpoint responde 404/410 — não utilizável (ainda)";
           } else {
             row.status = "inconclusive";
             row.note = "sondagem inconclusiva (fila/rede) — rode de novo mais tarde";
@@ -250,10 +303,11 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
     alive: 1,
     deprecating: 2,
     dead: 3,
-    inconclusive: 4,
-    unverified: 5,
-    notfree: 6,
-    nonchat: 7,
+    paid: 4,
+    inconclusive: 5,
+    unverified: 6,
+    notfree: 7,
+    nonchat: 8,
   } as const;
   for (const row of rows.values()) {
     if (row.status === "nonchat") {
@@ -302,9 +356,9 @@ function slugOf(id: string): { publisher: string; slug: string } {
 }
 
 /** Valores de reasoning_effort para as variants, a partir do models.dev. */
-export function effortValues(m?: ModelsDevModel): string[] {
+export function effortValues(m?: ModelsDevModel, profile: ProviderProfile = NVIDIA_PROFILE): string[] {
   const opts = m?.reasoning_options?.find((o) => o.type === "effort")?.values;
   if (opts?.length) return opts;
-  if (m?.reasoning) return ["low", "high", "max"]; // padrão seguro dos NIM
+  if (m?.reasoning) return [...profile.defaultEffortValues];
   return [];
 }

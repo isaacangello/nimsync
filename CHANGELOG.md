@@ -1,29 +1,48 @@
+**[Português (BR)](CHANGELOG.pt-BR.md)**
+
 # Changelog
+
+## [0.4.0] - 2026-11-19
+
+### Added
+
+- AIHubMix support through the custom `aisdk:@ai-sdk/openai-compatible` provider, without changing the default NVIDIA NIM flow
+- New `nimsync init --profile aihubmix` command with surgical JSONC editing, backup, validation, and rollback; the operation is idempotent
+- `--profile <nvidia|aihubmix>` flag and automatic profile inference from `--provider aihubmix`
+- AIHubMix whitelist restricted to `-free`/`:free` IDs or models with `0/0` cost on models.dev; separate catalog cache per provider
+- AIHubMix probes classify `404 model_retired` and `400 no_available_channel` as dead; `403` for insufficient balance is reported as alive-paid and never removed
+- ` ·MIX` marker, dedicated `AIHUBMIX_KEY_<MODEL>` environment variables, and `aihubmix:<id>` provenance namespace; legacy NVIDIA entries remain compatible
+- `doctor` reports the upstream model when it differs from the requested ID (aliases)
+- Documentation available in English and Brazilian Portuguese, with cross-linked README and changelog files
 
 ## [0.3.0] - 2026-11-12
 
-- marcador ' ·NIM' no nome de exibição dos modelos gerenciados — identificáveis e filtráveis no /models do OpenCode
-- novo comando nimsync list (origem dos modelos, offline)
-- proveniência em ~/.local/state/nimsync/managed.json (respeita renomeação manual)
-- assets da release versionados para evitar colisão de cache de CDN
+### Added
+
+- ` ·NIM` marker in managed model display names, making them identifiable and filterable in OpenCode `/models`
+- New offline `nimsync list` command to show model provenance
+- Provenance stored in `~/.local/state/nimsync/managed.json`, respecting manual renames
+- Versioned release assets to avoid CDN cache collisions
 
 ## [0.2.1] - 2026-11-11
 
-### Corrigido
+### Fixed
 
-- TUI: nada vem pré-marcado (nem novos, nem remoção de mortos) e o Enter agora mostra um resumo e exige confirmação `y/n` — um Enter desavisado não modifica mais a config
-- Timestamp do backup sem ponto sobrando (`opencode.jsonc.bak-nimsync-<ts>`)
-- Banner e `--version` leem a versão do `package.json` no build (mostravam v0.1.0 fixo)
+- TUI: nothing is preselected (neither new models nor dead-model removals), and Enter now shows a summary requiring explicit `y/n` confirmation — an accidental Enter no longer modifies the config
+- Removed an extra dot from the backup timestamp (`opencode.jsonc.bak-nimsync-<ts>`)
+- Banner and `--version` now read the version from `package.json` in builds (they previously displayed a fixed v0.1.0)
 
 ## [0.2.0] - 2026-11-11
 
-### Adicionado
+### Added
 
-- Descoberta como UNIÃO das fontes (site build.nvidia.com + `/v1/models` + models.dev), com **sondagem real** como árbitro de vida/morte: 404/410 = morto, 200 = vivo, timeout = inconclusivo (nunca removido)
-- Parse dos cards do site: badge **Free Endpoint** (elegibilidade ao trial), **Deprecation in Nd** e descrição do card
-- Heurística de chat pela descrição para modelos sem catálogo (filtra TTS/embeddings/visão dos recomendados)
-- Relatório em 4 seções por confiança de origem, com tags `[site+md] [site] [md] [conta]`
-- Mapa slug→ID da API resolvido por sondagem de variantes, com cache em `~/.cache/nimsync/slugmap.json`
-- Modelos configurados "fantasmas" (fora de todas as fontes) aparecem no relatório e são sondados
+- Discovery as the UNION of sources (build.nvidia.com + `/v1/models` + models.dev), with **real probing** as the life/death arbiter: 404/410 = dead, 200 = alive, timeout = inconclusive (never removed)
+- Website card parsing: **Free Endpoint** badge (trial eligibility), **Deprecation in Nd**, and card description
+- Chat heuristic based on descriptions for uncatalogued models (filters TTS/embeddings/vision from recommendations)
+- Four-section report ordered by source confidence, with `[site+md] [site] [md] [conta]` tags
+- Slug-to-API-ID map resolved by probing variants, cached in `~/.cache/nimsync/slugmap.json`
+- Configured "ghost" models (absent from every source) appear in the report and are probed
 
-Formato baseado em https://keepachangelog.com/pt-BR/1.1.0/ e SemVer.
+---
+
+Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).

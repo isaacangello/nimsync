@@ -54,8 +54,8 @@ function TuiApp({ ctx, opts, onDone }: Props) {
       if (confirming) {
         if (input === "y" || input === "Y" || key.return) {
           try {
-            const cfg = readConfig(opts.config ?? defaultConfigPath(), opts.provider);
-            const adds: AddSpec[] = pendingAdds.map((e) => toSpec(e, dedicated));
+            const cfg = readConfig(opts.config ?? defaultConfigPath(), opts.provider, opts.profile);
+            const adds: AddSpec[] = pendingAdds.map((e) => toSpec(e, dedicated, ctx.profile));
             if (adds.length === 0 && pendingRemoves.length === 0) {
               setConfirming(false);
               setError("nada selecionado");
@@ -111,7 +111,7 @@ function TuiApp({ ctx, opts, onDone }: Props) {
   return (
     <Box flexDirection="column" paddingX={1}>
       <Text bold color="cyan">
-        nimsync — NVIDIA NIM × {ctx.configPath}
+        nimsync — {ctx.profile.label} × {ctx.configPath}
       </Text>
       <Text dimColor>
         conta: {ctx.report.stats.accountCount} · models.dev: {ctx.report.stats.metaCount} · site:{" "}
@@ -125,7 +125,7 @@ function TuiApp({ ctx, opts, onDone }: Props) {
       {news.slice(0, MAX_LIST).map((r, i) => (
         <Text key={r.id} color={i === cursor ? "cyan" : undefined}>
           {i === cursor ? "❯" : " "} [{selectedNew.has(r.id) ? "x" : " "}] {r.id}
-          <Text dimColor> [{effortValues(r.meta).join("/") || "sem effort"}]</Text>
+          <Text dimColor> [{effortValues(r.meta, ctx.profile).join("/") || "sem effort"}]</Text>
         </Text>
       ))}
       {news.length > MAX_LIST && (
@@ -158,7 +158,9 @@ function TuiApp({ ctx, opts, onDone }: Props) {
 
       <Box marginTop={1}>
         <Text>
-          credencial p/ novos: {dedicated ? "dedicada (NVIDIA_KEY_<modelo>)" : "provider (NVIDIA_API_KEY)"}
+          credencial p/ novos: {dedicated
+            ? `dedicada (${ctx.profile.dedicatedKeyPrefix}<modelo>)`
+            : `provider (${ctx.profile.envKeys.join("/")})`}
         </Text>
       </Box>
 
@@ -189,14 +191,18 @@ function TuiApp({ ctx, opts, onDone }: Props) {
   );
 }
 
-function toSpec(r: ModelRow, dedicated: boolean): AddSpec {
+function toSpec(
+  r: ModelRow,
+  dedicated: boolean,
+  profile: import("../core/profile").ProviderProfile
+): AddSpec {
   return {
     id: r.apiId ?? r.id,
     name: r.name,
     context: r.meta?.limit?.context,
     output: r.meta?.limit?.output,
-    variants: effortValues(r.meta),
-    credEnv: dedicated ? envNameForModel(r.id) : undefined,
+    variants: effortValues(r.meta, profile),
+    credEnv: dedicated ? envNameForModel(r.id, profile.dedicatedKeyPrefix) : undefined,
   };
 }
 

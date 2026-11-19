@@ -9,13 +9,13 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { normKey } from "../core/normalize";
-
-const NIM_BASE = "https://integrate.api.nvidia.com/v1";
+import { NVIDIA_PROFILE, type ProviderProfile } from "../core/profile";
+import { probeChatModel as probeOpenAICompatible } from "./nim-api";
 const TTL_ALIVE = 24 * 60 * 60 * 1000;   // 24h
 const TTL_INCONCLUSIVE = 1 * 60 * 60 * 1000; // 1h
 const TTL_GONE = 7 * 24 * 60 * 60 * 1000;    // 7d (404/410 é estável)
 
-export type ProbeVerdict = "alive" | "gone" | "inconclusive";
+export type ProbeVerdict = "alive" | "alive-paid" | "gone" | "inconclusive";
 
 interface SlugMapEntry {
   apiId: string;
@@ -68,28 +68,10 @@ export function idVariants(publisher: string, slug: string): string[] {
 export async function probeChatModel(
   apiKey: string,
   model: string,
-  timeoutMs = 20_000
+  timeoutMs = 20_000,
+  profile: ProviderProfile = NVIDIA_PROFILE
 ): Promise<ProbeVerdict> {
-  try {
-    const res = await fetch(`${NIM_BASE}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: "Reply with exactly: OK" }],
-        max_tokens: 8,
-        temperature: 0.6,
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (res.ok) return "alive";
-    // 404 = não existe · 410 = end-of-life oficial da NVIDIA
-    if (res.status === 404 || res.status === 410) return "gone";
-    await res.text().catch(() => {});
-    return "inconclusive";
-  } catch {
-    return "inconclusive";
-  }
+  return probeOpenAICompatible(apiKey, model, timeoutMs, profile.baseURL, profile);
 }
 
 export interface ResolveResult {
@@ -106,15 +88,16 @@ export async function resolveSlugId(
   publisher: string,
   slug: string,
   apiKey: string,
-  opts: { knownId?: string; refresh?: boolean; timeoutMs?: number } = {}
+  opts: { knownId?: string; refresh?: boolean; timeoutMs?: number; profile?: ProviderProfile } = {}
 ): Promise<ResolveResult> {
   const key = normKey(`${publisher}/${slug}`);
   const m = map();
   const hit = m[key];
   if (!opts.refresh && hit) {
-    const ttl = hit.verdict === "alive" ? TTL_ALIVE : hit.verdict === "gone" ? TTL_GONE : TTL_INCONCLUSIVE;
+    const ttl = hit.verdict === "alive" || hit.verdict === "alive-paid" ? TTL_ALIVE : hit.verdict === "gone" ? TTL_GONE : TTL_INCONCLUSIVE;
     if (Date.now() - hit.probedAt < ttl) {
-      return { apiId: hit.verdict === "alive" ? hit.apiId : undefined, verdict: hit.verdict, probed: false };
+      const available = hit.verdict === "alive" || hit.verdict === "alive-paid";
+      return { apiId: available ? hit.apiId : undefined, verdict: hit.verdict, probed: false };
     }
   }
   if (opts.knownId) {
@@ -127,9 +110,9 @@ export async function resolveSlugId(
   let apiId: string | undefined;
   // sequencial: o primeiro "alive" encerra; 404s são instantâneos
   for (const v of variants) {
-    const r = await probeChatModel(apiKey, v, opts.timeoutMs ?? 20_000);
-    if (r === "alive") {
-      verdict = "alive";
+    const r = await probeChatModel(apiKey, v, opts.timeoutMs ?? 20_000, opts.profile);
+    if (r === "alive" || r === "alive-paid") {
+      verdict = r;
       apiId = v;
       break;
     }
@@ -143,5 +126,5 @@ export async function resolveSlugId(
   }
   m[key] = { apiId: apiId ?? variants[0], verdict, probedAt: Date.now() };
   save(m);
-  return { apiId: verdict === "alive" ? apiId : undefined, verdict, probed: true };
+  return { apiId: verdict === "alive" || verdict === "alive-paid" ? apiId : undefined, verdict, probed: true };
 }

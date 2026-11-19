@@ -9,6 +9,7 @@ import { applyEdits, modify, parse, type FormattingOptions } from "jsonc-parser"
 import { copyFileSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { addMarker, recordManaged, unrecordManaged } from "./managed";
+import { inferProfile, NVIDIA_PROFILE, type ProfileName, type ProviderProfile } from "./profile";
 
 export interface OpencodeConfig {
   path: string;
@@ -16,6 +17,7 @@ export interface OpencodeConfig {
   data: Record<string, unknown>;
   providerId: string;
   providerBaseURL: string | undefined; // expressão crua (ex.: "{env:NVIDIA_API_URL1}")
+  profile: ProviderProfile;
   warnings: string[];
 }
 
@@ -25,14 +27,15 @@ export function defaultConfigPath(): string {
 
 const FORMATTING: FormattingOptions = { insertSpaces: true, tabSize: 2, eol: "\n" };
 
-/** Localiza o provider NVIDIA da config (por id preferido, id convencional, ou baseURL/env do NIM). */
+/** Localiza o provider do perfil por id preferido, id convencional ou baseURL/env. */
 function findProvider(
   data: Record<string, unknown>,
-  preferredId?: string
+  preferredId: string | undefined,
+  profile: ProviderProfile
 ): { id: string; baseURL: string | undefined } | null {
   const providers = data.providers as Record<string, { settings?: Record<string, unknown> }> | undefined;
   if (!providers) return null;
-  const candidates = [preferredId, "nvidia-nim"].filter((x): x is string => Boolean(x));
+  const candidates = [preferredId, profile.providerId].filter((x): x is string => Boolean(x));
   for (const id of candidates) {
     if (providers[id]) {
       return { id, baseURL: providers[id].settings?.baseURL as string | undefined };
@@ -41,30 +44,35 @@ function findProvider(
   for (const [id, p] of Object.entries(providers)) {
     const baseURL = p?.settings?.baseURL;
     // cobre URL real e placeholders {env:NVIDIA_API_URL1}
-    if (typeof baseURL === "string" && /nvidia/i.test(baseURL)) {
+    if (typeof baseURL === "string" && profile.providerUrlPattern.test(baseURL)) {
       return { id, baseURL };
     }
   }
   return null;
 }
 
-export function readConfig(path: string, preferredProviderId?: string): OpencodeConfig {
+export function readConfig(
+  path: string,
+  preferredProviderId?: string,
+  profileName?: ProfileName
+): OpencodeConfig {
   const text = readFileSync(path, "utf8");
   const data = parse(text) as Record<string, unknown>;
   if (!data || typeof data !== "object") {
     throw new Error(`não consegui parsear ${path} como JSONC`);
   }
+  const profile = inferProfile(preferredProviderId, profileName);
   const warnings: string[] = [];
-  const provider = findProvider(data, preferredProviderId);
+  const provider = findProvider(data, preferredProviderId, profile);
   if (!provider) {
     throw new Error(
-      `nenhum provider NVIDIA encontrado em ${path} (procurei id "${preferredProviderId ?? "nvidia-nim"}" ou baseURL integrate.api.nvidia.com)`
+      `nenhum provider ${profile.label} encontrado em ${path} (procurei id "${preferredProviderId ?? profile.providerId}" ou baseURL compatível)`
     );
   }
   const providers = data.providers as Record<string, unknown>;
   const hasModels = Boolean((providers[provider.id] as { models?: unknown })?.models);
   if (!hasModels) warnings.push(`provider "${provider.id}" não tem mapa "models" ainda`);
-  return { path, text, data, providerId: provider.id, providerBaseURL: provider.baseURL, warnings };
+  return { path, text, data, providerId: provider.id, providerBaseURL: provider.baseURL, profile, warnings };
 }
 
 export function configuredModels(cfg: OpencodeConfig): string[] {
@@ -89,10 +97,14 @@ export interface AddSpec {
   credEnv?: string; // se definido, cria settings.apiKey "{env:VAR}" por modelo
 }
 
-export function buildModelDef(spec: AddSpec, providerBaseURL: string | undefined): Record<string, unknown> {
+export function buildModelDef(
+  spec: AddSpec,
+  providerBaseURL: string | undefined,
+  profile: ProviderProfile = NVIDIA_PROFILE
+): Record<string, unknown> {
   const def: Record<string, unknown> = {
     modelID: spec.id,
-    name: addMarker(spec.name ?? spec.id), // marcador identifica modelos gerenciados no /models do OpenCode
+    name: addMarker(spec.name ?? spec.id, profile), // identifica modelos gerenciados no /models
   };
   if (spec.credEnv) {
     const settings: Record<string, string> = { apiKey: `{env:${spec.credEnv}}` };
@@ -139,7 +151,7 @@ export function applyConfigEdits(
     text = applyEdits(text, edits);
   }
   for (const spec of adds) {
-    const def = buildModelDef(spec, cfg.providerBaseURL);
+    const def = buildModelDef(spec, cfg.providerBaseURL, cfg.profile);
     const edits = modify(text, [...modelsPath, spec.id], def, { formattingOptions: FORMATTING });
     text = applyEdits(text, edits);
   }
@@ -164,9 +176,70 @@ export function applyConfigEdits(
   writeFileSync(path, text);
   // proveniência: registra adds / esquece removes (só depois da escrita validada)
   // entry.name = nome BASE (sem marcador) — a exibição é base + NAME_MARKER
-  for (const spec of adds) recordManaged(spec.id, spec.name ?? spec.id, "add");
-  for (const r of removes) unrecordManaged(r);
+  for (const spec of adds) recordManaged(spec.id, spec.name ?? spec.id, "add", cfg.profile);
+  for (const r of removes) unrecordManaged(r, cfg.profile);
   return { backup, added: adds.map((a) => a.id), removed: removes };
+}
+
+function initialProviderDef(profile: ProviderProfile): Record<string, unknown> {
+  return {
+    name: profile.name === "aihubmix" ? "AIHubMix (gratuitos)" : "NVIDIA (selecionados)",
+    package: "aisdk:@ai-sdk/openai-compatible",
+    settings: {
+      apiKey: `{env:${profile.initApiKeyEnv}}`,
+      baseURL: profile.baseURL,
+      headerTimeout: 600000,
+    },
+    models: {},
+  };
+}
+
+/** Prévia do init sem tocar no arquivo. Null significa que o provider já existe. */
+export function previewProviderInit(
+  path: string,
+  profile: ProviderProfile,
+  providerId = profile.providerId
+): string | null {
+  const text = readFileSync(path, "utf8");
+  const data = parse(text) as Record<string, unknown> | undefined;
+  if (!data || typeof data !== "object") throw new Error(`não consegui parsear ${path} como JSONC`);
+  const providers = data.providers as Record<string, unknown> | undefined;
+  if (providers?.[providerId]) return null;
+  return applyEdits(
+    text,
+    modify(text, ["providers", providerId], initialProviderDef(profile), { formattingOptions: FORMATTING })
+  );
+}
+
+/** Cria somente o bloco do provider; nunca altera um provider já existente. */
+export function initProvider(
+  path: string,
+  profile: ProviderProfile,
+  providerId = profile.providerId
+): { backup: string } | null {
+  const text = previewProviderInit(path, profile, providerId);
+  if (text === null) return null;
+  const backup = makeBackup(path);
+  const after = parse(text) as Record<string, unknown> | undefined;
+  const created = (after?.providers as Record<string, {
+    package?: string;
+    settings?: Record<string, unknown>;
+    models?: Record<string, unknown>;
+  }> | undefined)?.[providerId];
+  const problems: string[] = [];
+  if (!created) problems.push("provider não foi inserido");
+  else {
+    if (created.package !== "aisdk:@ai-sdk/openai-compatible") problems.push("package incorreto");
+    if (created.settings?.apiKey !== `{env:${profile.initApiKeyEnv}}`) problems.push("apiKey incorreta");
+    if (created.settings?.baseURL !== profile.baseURL) problems.push("baseURL incorreta");
+    if (!created.models || Object.keys(created.models).length !== 0) problems.push("models inicial não está vazio");
+  }
+  if (problems.length > 0) {
+    renameSync(backup, path);
+    throw new Error(`validação do init falhou (${problems.join("; ")}) — config restaurada do backup`);
+  }
+  writeFileSync(path, text);
+  return { backup };
 }
 
 /** Mapa id → nome de exibição atual dos modelos configurados no provider. */
@@ -227,7 +300,7 @@ export function previewEdits(cfg: OpencodeConfig, adds: AddSpec[], removes: stri
     text = applyEdits(text, modify(text, [...modelsPath, id], undefined, { formattingOptions: FORMATTING }));
   }
   for (const spec of adds) {
-    const def = buildModelDef(spec, cfg.providerBaseURL);
+    const def = buildModelDef(spec, cfg.providerBaseURL, cfg.profile);
     text = applyEdits(text, modify(text, [...modelsPath, spec.id], def, { formattingOptions: FORMATTING }));
   }
   return text;

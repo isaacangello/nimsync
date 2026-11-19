@@ -42,9 +42,10 @@ export type RowStatus =
   | "new-ready"      // novo, sondado vivo (pronto pra configurar)
   | "alive"          // configurado e vivo
   | "deprecating"    // aviso ativo (dias) ou sunset
-  | "dead"           // 404/410 confirmado por sondagem
+  | "dead"           // fim confirmado por sondagem (o código depende do provider)
+  | "paid"           // rota viva, mas bloqueada por saldo — nunca é morta
   | "inconclusive"   // sondagem não decidiu (fila/rede) — nunca age
-  | "notfree"        // card do site SEM Free Endpoint (container/download)
+  | "notfree"        // sem Free Endpoint ou fora da whitelist gratuita
   | "unverified"     // não sondado (ex.: só no models.dev)
   | "nonchat";       // sem tool_call/reasoning (embeddings, rerank, visão…)
 
@@ -95,6 +96,7 @@ export interface PlannedChange {
 export interface CliOptions {
   config?: string;
   provider?: string;
+  profile?: import("./core/profile").ProfileName;
   refresh?: boolean;
   yes?: boolean;
   all?: boolean;

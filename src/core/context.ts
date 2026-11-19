@@ -9,11 +9,13 @@ import { fetchModelsDev } from "../sources/modelsdev";
 import { fetchSiteCards } from "../sources/buildsite";
 import { clearSlugMap } from "../sources/slugmap";
 import { addableRows, removableRows, deprecatingConfigured } from "../types";
-import type { CliOptions, Report } from "../types";
+import type { CliOptions, Report, SiteModel } from "../types";
+import { NVIDIA_PROFILE, type ProviderProfile } from "./profile";
 
 export interface SyncContext {
   configPath: string;
   providerId: string;
+  profile: ProviderProfile;
   report: Report;
   fromCache: boolean;
   siteDegraded: boolean;
@@ -21,19 +23,21 @@ export interface SyncContext {
 
 export async function loadContext(opts: CliOptions): Promise<SyncContext> {
   const configPath = opts.config ?? defaultConfigPath();
-  const cfg = readConfig(configPath, opts.provider);
+  const cfg = readConfig(configPath, opts.provider, opts.profile);
   const configured = configuredModels(cfg);
+  const profile = cfg.profile;
 
-  const apiKey = resolveEnv("NVIDIA_API_KEY");
+  const apiKey = profile.envKeys.map((key) => resolveEnv(key)).find(Boolean);
   if (!apiKey) {
-    throw new Error("chave NVIDIA não encontrada (procurei NVIDIA_API_KEY em process.env e ~/.zshrc)");
+    throw new Error(`chave ${profile.label} não encontrada (procurei ${profile.envKeys.join(", ")} em process.env e ~/.zshrc)`);
   }
-  if (opts.refresh) clearSlugMap();
+  if (opts.refresh && profile.hasSite) clearSlugMap();
 
+  const emptySite: { cards: SiteModel[]; degraded: boolean } = { cards: [], degraded: false };
   const [account, meta, site] = await Promise.all([
-    fetchAccountModels(apiKey),
-    fetchModelsDev(Boolean(opts.refresh)),
-    fetchSiteCards(Boolean(opts.refresh)),
+    fetchAccountModels(apiKey, 30_000, profile.baseURL),
+    fetchModelsDev(Boolean(opts.refresh), profile.catalogId),
+    profile.hasSite ? fetchSiteCards(Boolean(opts.refresh)) : Promise.resolve(emptySite),
   ]);
 
   const report = await computeReport({
@@ -42,6 +46,7 @@ export async function loadContext(opts: CliOptions): Promise<SyncContext> {
     meta,
     siteCards: site.cards,
     apiKey,
+    profile,
     refresh: opts.refresh,
     noProbe: opts.noProbe,
     timeoutMs: opts.timeoutMs ? Number(opts.timeoutMs) : undefined,
@@ -50,6 +55,7 @@ export async function loadContext(opts: CliOptions): Promise<SyncContext> {
   return {
     configPath,
     providerId: cfg.providerId,
+    profile,
     report,
     fromCache: !opts.refresh,
     siteDegraded: site.degraded,
@@ -93,19 +99,22 @@ function truncate(s: string, n: number): string {
 }
 
 /** Relatório nas 4 seções, ordenadas por confiança da origem. */
-export function formatReport(report: Report, colors = C): string {
+export function formatReport(report: Report, colors = C, profile: ProviderProfile = NVIDIA_PROFILE): string {
   const out: string[] = [];
   const { green, red, yellow, dim, cyan, reset, bold } = colors;
   const { freeEndpoint: fe, noFreeEndpoint: nfe, modelsdevOnly: mdo, rest } = report;
+  const isAIHubMix = profile.name === "aihubmix";
 
-  // ---- seção 1: SITE · FREE ENDPOINT
+  // ---- seção 1: elegíveis à whitelist
   const novos = fe.filter((r) => r.status === "new-ready");
   const config = fe.filter((r) => r.configured && r.status === "alive");
   const deprec = fe.filter((r) => r.status === "deprecating");
   const dead = fe.filter((r) => r.status === "dead");
+  const paid = fe.filter((r) => r.status === "paid");
   const inconc = fe.filter((r) => r.status === "inconclusive");
 
-  out.push(`\n${bold}1) SITE · FREE ENDPOINT — elegíveis ao trial (${fe.length})${reset}`);
+  const section1 = isAIHubMix ? "GRATUITOS · AIHUBMIX — whitelist por ID/custo" : "SITE · FREE ENDPOINT — elegíveis ao trial";
+  out.push(`\n${bold}1) ${section1} (${fe.length})${reset}`);
   if (novos.length) {
     out.push(`  ${green}${bold}NOVOS prontos (${novos.length}):${reset}`);
     for (const r of novos) {
@@ -134,14 +143,19 @@ export function formatReport(report: Report, colors = C): string {
       out.push(`${red}  ✗${reset} ${rowLine(r, colors)}${r.configured ? ` ${dim}— remova! ${r.note ?? ""}${reset}` : ` ${dim}— ${r.note ?? ""}${reset}`}`);
     }
   }
+  if (paid.length) {
+    out.push(`  ${yellow}VIVOS, MAS PAGOS/SALDO INSUFICIENTE (${paid.length}) — nunca remover como mortos:${reset}`);
+    for (const r of paid) out.push(`${yellow}  $${reset} ${rowLine(r, colors)} ${dim}— ${r.note ?? ""}${reset}`);
+  }
   if (inconc.length) {
     out.push(`  ${yellow}INCONCLUSIVOS (${inconc.length}) — rode de novo mais tarde:${reset}`);
     for (const r of inconc) out.push(`${yellow}  ?${reset} ${rowLine(r, colors)} ${dim}— ${r.note ?? ""}${reset}`);
   }
-  if (fe.length === 0) out.push(`  ${dim}nenhum card com Free Endpoint${reset}`);
+  if (fe.length === 0) out.push(`  ${dim}${isAIHubMix ? "nenhum modelo gratuito encontrado" : "nenhum card com Free Endpoint"}${reset}`);
 
-  // ---- seção 2: SITE · SEM FREE ENDPOINT
-  out.push(`\n${bold}2) SITE · SEM FREE ENDPOINT — containers/download (${nfe.length})${reset}`);
+  // ---- seção 2: fora da whitelist gratuita
+  const section2 = isAIHubMix ? "PAGOS / FORA DA WHITELIST GRATUITA" : "SITE · SEM FREE ENDPOINT — containers/download";
+  out.push(`\n${bold}2) ${section2} (${nfe.length})${reset}`);
   for (const r of nfe.slice(0, 10)) out.push(`${dim}  ·${reset} ${rowLine(r, colors)} ${dim}— ${truncate(r.description ?? r.note ?? "", 80)}${reset}`);
   if (nfe.length > 10) out.push(`  ${dim}+${nfe.length - 10} restantes${reset}`);
 

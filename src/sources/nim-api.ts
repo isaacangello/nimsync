@@ -1,10 +1,16 @@
-// Fonte 1 (autoritativa): GET /v1/models na API do NIM com a chave da conta.
-// Modelo fora desta lista = não disponível para a conta (morto/descontinuado).
+// Fonte 1: GET /v1/models na API OpenAI-compatible com a chave da conta.
+// A listagem é uma fonte de descoberta; a sondagem continua sendo o veredito.
 
-const NIM_BASE = "https://integrate.api.nvidia.com/v1";
+import { NVIDIA_PROFILE, type ProviderProfile } from "../core/profile";
 
-export async function fetchAccountModels(apiKey: string, timeoutMs = 30_000): Promise<string[]> {
-  const res = await fetch(`${NIM_BASE}/models`, {
+const NIM_BASE = NVIDIA_PROFILE.baseURL;
+
+export async function fetchAccountModels(
+  apiKey: string,
+  timeoutMs = 30_000,
+  baseURL = NIM_BASE
+): Promise<string[]> {
+  const res = await fetch(`${baseURL.replace(/\/$/, "")}/models`, {
     headers: { Authorization: `Bearer ${apiKey}` },
     signal: AbortSignal.timeout(timeoutMs),
   });
@@ -19,17 +25,18 @@ export async function fetchAccountModels(apiKey: string, timeoutMs = 30_000): Pr
 }
 
 /**
- * Sondagem: o modelo ainda responde apesar de ter sumido do /v1/models?
- * Caso glm-5.3 (nov/2026): fora do catálogo mas servindo em sunset.
- * "inconclusive" (timeout/rede/fila) NUNCA deve remover nada.
+ * Sondagem mínima. Respostas inconclusivas (timeout/rede/fila/saldo desconhecido)
+ * nunca autorizam remoção. A classificação de morte/saldo pertence ao perfil.
  */
 export async function probeChatModel(
   apiKey: string,
   model: string,
-  timeoutMs = 30_000
-): Promise<"alive" | "gone" | "inconclusive"> {
+  timeoutMs = 30_000,
+  baseURL = NIM_BASE,
+  profile: ProviderProfile = NVIDIA_PROFILE
+): Promise<"alive" | "alive-paid" | "gone" | "inconclusive"> {
   try {
-    const res = await fetch(`${NIM_BASE}/chat/completions`, {
+    const res = await fetch(`${baseURL.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
@@ -40,13 +47,12 @@ export async function probeChatModel(
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (res.ok) return "alive";
-    // 404 = modelo não existe · 410 = end-of-life oficial da NVIDIA (o doctor
-    // mostrou: "reached its end of life") — ambos são mortes definitivas
-    if (res.status === 404 || res.status === 410) return "gone";
-    // drena o corpo para liberar a conexão
-    await res.text().catch(() => {});
-    return "inconclusive";
+    if (res.ok) {
+      await res.text().catch(() => {});
+      return "alive";
+    }
+    const body = await res.text().catch(() => "");
+    return profile.classifyProbe(res.status, body) ?? "inconclusive";
   } catch {
     return "inconclusive";
   }

@@ -16,7 +16,7 @@ interface Row {
 
 export async function runDoctor(opts: CliOptions): Promise<number> {
   const configPath = opts.config ?? defaultConfigPath();
-  const cfg = readConfig(configPath, opts.provider);
+  const cfg = readConfig(configPath, opts.provider, opts.profile);
   const providers = cfg.data.providers as Record<
     string,
     {
@@ -38,7 +38,7 @@ export async function runDoctor(opts: CliOptions): Promise<number> {
     const apiKey = resolvePlaceholder(def.settings?.apiKey ?? String(providerKey ?? "")) ?? "";
     const baseURL =
       resolvePlaceholder(def.settings?.baseURL ?? String(provider.settings?.baseURL ?? "")) ??
-      "https://integrate.api.nvidia.com/v1";
+      cfg.profile.baseURL;
     const upstreamId = def.modelID ?? id;
 
     if (!apiKey) {
@@ -61,7 +61,9 @@ export async function runDoctor(opts: CliOptions): Promise<number> {
       });
       const ms = Math.round(performance.now() - start);
       if (res.ok) {
-        rows.push({ id, status: "OK", ms, detail: `HTTP 200` });
+        const body = (await res.json().catch(() => ({}))) as { model?: string };
+        const alias = body.model && body.model !== upstreamId ? ` · serve ${body.model}` : "";
+        rows.push({ id, status: "OK", ms, detail: `HTTP 200${alias}` });
       } else {
         const body = (await res.text()).slice(0, 120).replace(/\s+/g, " ");
         rows.push({ id, status: "erro", ms, detail: `HTTP ${res.status} — ${body}` });

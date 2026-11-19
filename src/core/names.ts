@@ -25,10 +25,10 @@ export function seedFromConfigured(cfg: OpencodeConfig): number {
   const names = configuredNames(cfg);
   const seed: Record<string, string> = {};
   for (const [id, name] of Object.entries(names)) {
-    if (hasMarker(name)) continue; // já marcado e provavelmente registrado
+    if (hasMarker(name, cfg.profile)) continue; // já marcado e provavelmente registrado
     seed[id] = name;
   }
-  return seedManaged(seed); // seedManaged não sobrescreve entradas existentes
+  return seedManaged(seed, cfg.profile); // não sobrescreve entradas existentes
 }
 
 export function syncNameMarkers(cfg: OpencodeConfig): NameSyncResult | null {
@@ -36,17 +36,17 @@ export function syncNameMarkers(cfg: OpencodeConfig): NameSyncResult | null {
   const renames: Array<{ id: string; name: string }> = [];
   const manual: string[] = [];
 
-  for (const [id, entry] of allManaged()) {
+  for (const [id, entry] of allManaged(cfg.profile)) {
     const cur = names[id];
     if (cur == null) continue; // registrado mas não configurado (nada a marcar)
-    if (hasMarker(cur)) continue; // já marcado
+    if (hasMarker(cur, cfg.profile)) continue; // já marcado
     // entry.name = nome base na hora do registro; se o atual difere do base,
     // o usuário renomeou na mão (ou removeu o marcador) — respeito
     if (entry.name && cur !== entry.name) {
       manual.push(id);
       continue;
     }
-    renames.push({ id, name: addMarker(cur) });
+    renames.push({ id, name: addMarker(cur, cfg.profile) });
   }
   if (renames.length === 0) return { renamed: [], manual, backup: undefined };
 

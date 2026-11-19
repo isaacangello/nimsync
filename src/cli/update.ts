@@ -20,11 +20,11 @@ import type { CliOptions, ModelRow } from "../types";
 
 export async function runUpdate(opts: CliOptions): Promise<number> {
   const ctx = await loadContext(opts);
-  const { report } = ctx;
+  const { report, profile } = ctx;
   const interactive = Boolean(stdin.isTTY) && !opts.yes && !opts.json;
 
   const plannedRemoves = removableRows(report).map((r) => r.id);
-  let plannedAdds: AddSpec[] = addableRows(report).map((r) => toAddSpec(r, opts));
+  let plannedAdds: AddSpec[] = addableRows(report).map((r) => toAddSpec(r, profile));
   const deprecating = deprecatingConfigured(report);
 
   // ---- decisão: remover mortos
@@ -35,7 +35,7 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
       console.error("há modelos a remover; use --yes para aceitar os defaults ou rode interativamente em um TTY");
       return 2;
     } else if (interactive) {
-      console.log(`${C.red}Modelos mortos (sondagem confirmou 404/410):${C.reset}`);
+      console.log(`${C.red}Modelos mortos (fim confirmado pela sondagem do ${profile.label}):${C.reset}`);
       for (const r of removableRows(report)) console.log(`  - ${r.id} ${C.dim}— ${r.note ?? ""}${C.reset}`);
       const ans = await ask(`Remover ${plannedRemoves.length} modelo(s)? [S/n] `);
       if (/^n/i.test(ans)) plannedRemoves.length = 0;
@@ -49,7 +49,7 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
     } else if (opts.yes) {
       plannedAdds = []; // --yes sem --all: conservador
     } else if (interactive) {
-      console.log(`${C.green}Novos modelos disponíveis (Free Endpoint + sondagem OK):${C.reset}`);
+      console.log(`${C.green}Novos modelos disponíveis (${profile.name === "aihubmix" ? "gratuitos" : "Free Endpoint"} + sondagem OK):${C.reset}`);
       plannedAdds.forEach((s, i) =>
         console.log(`  ${i + 1}. ${s.id} ${C.dim}[${s.variants?.join("/") ?? "sem effort"}]${C.reset}`)
       );
@@ -69,11 +69,11 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
       // pergunta de credencial por modelo escolhido
       for (const spec of plannedAdds) {
         const cred = await ask(
-          `Chave para ${C.cyan}${spec.id}${C.reset}: (p)rovider NVIDIA_API_KEY / (d)edicada ${envNameForModel(spec.id)}? [P/d] `
+          `Chave para ${C.cyan}${spec.id}${C.reset}: (p)rovider ${profile.envKeys.join("/")} / (d)edicada ${envNameForModel(spec.id, profile.dedicatedKeyPrefix)}? [P/d] `
         );
         if (/^d/i.test(cred)) {
-          spec.credEnv = envNameForModel(spec.id);
-          console.log(`  ${C.dim}adicione ao ~/.zshrc:  export ${spec.credEnv}="nvapi-..."${C.reset}`);
+          spec.credEnv = envNameForModel(spec.id, profile.dedicatedKeyPrefix);
+          console.log(`  ${C.dim}adicione ao ~/.zshrc:  export ${spec.credEnv}="${profile.keyExample}"${C.reset}`);
         }
       }
     } else if (opts.json) {
@@ -95,14 +95,14 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
       console.log(JSON.stringify({ adds: [], removes: [], renames: [] }, null, 2));
       return 0;
     }
-    // mesmo sem adds/removes, garante os marcadores " ·NIM" (migração idempotente)
+    // mesmo sem adds/removes, garante o marcador do perfil (migração idempotente)
     const nameSync = syncNames(loadConfigForWrite(opts));
     if (nameSync.renamed.length === 0) {
       console.log("nada a fazer — config já está em dia com as regras atuais");
       return 0;
     }
     console.log(
-      `${C.cyan}✦${C.reset} marcador " ·NIM" aplicado a ${nameSync.renamed.length} modelo(s) — backup: ${C.dim}${nameSync.backup}${C.reset}`
+      `${C.cyan}✦${C.reset} marcador "${profile.marker}" aplicado a ${nameSync.renamed.length} modelo(s) — backup: ${C.dim}${nameSync.backup}${C.reset}`
     );
     if (nameSync.manual.length > 0) {
       console.log(`  ${C.dim}renomeações manuais respeitadas: ${nameSync.manual.join(", ")}${C.reset}`);
@@ -115,7 +115,7 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
     console.log(
       JSON.stringify(
         {
-          adds: plannedAdds.map((a) => ({ id: a.id, credEnv: a.credEnv ?? "NVIDIA_API_KEY" })),
+          adds: plannedAdds.map((a) => ({ id: a.id, credEnv: a.credEnv ?? profile.initApiKeyEnv })),
           removes: plannedRemoves,
         },
         null,
@@ -144,10 +144,10 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
     console.log(`  ${C.green}adicionados:${C.reset} ${result.added.join(", ")}`);
   }
   // marca os gerenciados que faltam (inclui os recém-adicionados) — idempotente
-  const nameSync = syncNames(readConfig(cfg.path, cfg.providerId));
+  const nameSync = syncNames(readConfig(cfg.path, cfg.providerId, cfg.profile.name));
   if (nameSync.renamed.length > 0) {
     console.log(
-      `  ${C.cyan}✦${C.reset} marcador " ·NIM" aplicado a ${nameSync.renamed.length} modelo(s) — backup: ${C.dim}${nameSync.backup}${C.reset}`
+      `  ${C.cyan}✦${C.reset} marcador "${profile.marker}" aplicado a ${nameSync.renamed.length} modelo(s) — backup: ${C.dim}${nameSync.backup}${C.reset}`
     );
   }
   if (nameSync.manual.length > 0) {
@@ -165,23 +165,23 @@ function syncNames(cfg: ReturnType<typeof readConfig>) {
   return syncNameMarkers(cfg) ?? { renamed: [], manual: [] };
 }
 
-function toAddSpec(row: ModelRow, _opts: CliOptions): AddSpec {
+function toAddSpec(row: ModelRow, profile: import("../core/profile").ProviderProfile): AddSpec {
   return {
     id: row.apiId ?? row.id, // ID confirmado por sondagem quando difere do slug
     name: row.name,
     context: row.meta?.limit?.context,
     output: row.meta?.limit?.output,
-    variants: effortValues(row.meta),
+    variants: effortValues(row.meta, profile),
   };
 }
 
 // helpers para re-ler a config na hora de escrever (o diff pode ter demorado)
 import { readConfig, defaultConfigPath } from "../core/config";
 function cfgForPreview(opts: CliOptions) {
-  return readConfig(opts.config ?? defaultConfigPath(), opts.provider);
+  return readConfig(opts.config ?? defaultConfigPath(), opts.provider, opts.profile);
 }
 function loadConfigForWrite(opts: CliOptions) {
-  return readConfig(opts.config ?? defaultConfigPath(), opts.provider);
+  return readConfig(opts.config ?? defaultConfigPath(), opts.provider, opts.profile);
 }
 
 async function ask(prompt: string): Promise<string> {

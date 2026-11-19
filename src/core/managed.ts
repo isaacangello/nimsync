@@ -1,23 +1,22 @@
 // Proveniência: quais modelos o nimsync adicionou/gerencia.
 //
 // Estado em ~/.local/state/nimsync/managed.json (XDG_STATE_HOME) — e não no
-// opencode.jsonc (schema do OpenCode não documenta campos extras) nem no
-// ~/.cache (que já se perdeu em queda de energia nesta máquina).
+// opencode.jsonc nem no cache. Entradas NVIDIA legadas continuam sem prefixo;
+// AIHubMix usa "aihubmix:<model-id>", evitando colisões entre providers.
 //
-// Cada entrada guarda o nome BASE do modelo (sem marcador); a exibição no
-// OpenCode é base + " ·NIM". É isso que permite distinguir "nome sem marcador
-// porque ainda não passou" de "usuário renomeou na mão — respeito e não
-// reescrevo".
+// Cada entrada guarda o nome BASE (sem marcador). Se o usuário renomear na mão,
+// a sincronização de nomes respeita e não reescreve.
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { version as VERSION } from "../../package.json";
+import { NVIDIA_PROFILE, type ProviderProfile } from "./profile";
 
-/** Marcador de exibição anexado ao name dos modelos gerenciados pelo nimsync. */
-export const NAME_MARKER = " ·NIM";
+/** Marcador NVIDIA legado; novos códigos devem usar cfg.profile.marker. */
+export const NAME_MARKER = NVIDIA_PROFILE.marker;
 
 export interface ManagedEntry {
-  /** Nome BASE de exibição (sem o marcador) — a exibição é base + NAME_MARKER. */
+  /** Nome BASE de exibição (sem o marcador). */
   name: string;
   /** ISO date da adição/migração. */
   addedAt: string;
@@ -44,34 +43,46 @@ function load(): ManagedMap {
 
 function save(map: ManagedMap): void {
   try {
-    mkdirSync(`${stateHome()}/nimsync`, { recursive: true }); // cria o SUBDIRETÓRIO, não só o state home
+    const stateHome = process.env.XDG_STATE_HOME || `${homedir()}/.local/state`;
+    mkdirSync(`${stateHome}/nimsync`, { recursive: true });
     writeFileSync(statePath(), JSON.stringify(map, null, 1));
   } catch {
     // best-effort: proveniência nunca deve quebrar o comando principal
   }
 }
 
-function stateHome(): string {
-  return process.env.XDG_STATE_HOME || `${homedir()}/.local/state`;
+function managedKey(id: string, profile: ProviderProfile): string {
+  return profile.name === "nvidia" ? id : `${profile.name}:${id}`;
 }
 
-export function isManaged(id: string): boolean {
-  return Boolean(load()[id]);
+export function isManaged(id: string, profile: ProviderProfile = NVIDIA_PROFILE): boolean {
+  return Boolean(load()[managedKey(id, profile)]);
 }
 
-export function managedEntry(id: string): ManagedEntry | undefined {
-  return load()[id];
+export function managedEntry(id: string, profile: ProviderProfile = NVIDIA_PROFILE): ManagedEntry | undefined {
+  return load()[managedKey(id, profile)];
 }
 
-export function allManaged(): Array<[string, ManagedEntry]> {
-  return Object.entries(load()).sort(([a], [b]) => a.localeCompare(b));
+/** Entradas do perfil, sempre com o model-id sem o namespace no resultado. */
+export function allManaged(profile: ProviderProfile = NVIDIA_PROFILE): Array<[string, ManagedEntry]> {
+  const prefix = `${profile.name}:`;
+  return Object.entries(load())
+    .filter(([id]) => (profile.name === "nvidia" ? !/^[a-z0-9]+:/i.test(id) : id.startsWith(prefix)))
+    .map(([id, entry]): [string, ManagedEntry] => [profile.name === "nvidia" ? id : id.slice(prefix.length), entry])
+    .sort(([a], [b]) => a.localeCompare(b));
 }
 
 /** Registra/atualiza a entrada de um modelo gerenciado. */
-export function recordManaged(id: string, name: string, via: ManagedEntry["via"] = "add"): void {
+export function recordManaged(
+  id: string,
+  name: string,
+  via: ManagedEntry["via"] = "add",
+  profile: ProviderProfile = NVIDIA_PROFILE
+): void {
   const m = load();
-  const prev = m[id];
-  m[id] = {
+  const key = managedKey(id, profile);
+  const prev = m[key];
+  m[key] = {
     name,
     addedAt: prev?.addedAt ?? new Date().toISOString(),
     version: VERSION,
@@ -80,35 +91,34 @@ export function recordManaged(id: string, name: string, via: ManagedEntry["via"]
   save(m);
 }
 
-export function unrecordManaged(id: string): void {
+export function unrecordManaged(id: string, profile: ProviderProfile = NVIDIA_PROFILE): void {
   const m = load();
-  if (id in m) {
-    delete m[id];
+  const key = managedKey(id, profile);
+  if (key in m) {
+    delete m[key];
     save(m);
   }
 }
 
-/**
- * Semeia entradas para modelos ainda não registrados (migração dos já
- * configurados). NÃO sobrescreve entradas existentes.
- */
-export function seedManaged(names: Record<string, string>): number {
+/** Semeia entradas sem sobrescrever registros existentes. */
+export function seedManaged(names: Record<string, string>, profile: ProviderProfile = NVIDIA_PROFILE): number {
   const m = load();
   let n = 0;
   for (const [id, name] of Object.entries(names)) {
-    if (m[id]) continue;
-    m[id] = { name, addedAt: new Date().toISOString(), version: VERSION, via: "migration" };
+    const key = managedKey(id, profile);
+    if (m[key]) continue;
+    m[key] = { name, addedAt: new Date().toISOString(), version: VERSION, via: "migration" };
     n++;
   }
   if (n > 0) save(m);
   return n;
 }
 
-export function hasMarker(name: string): boolean {
-  return name.endsWith(NAME_MARKER);
+export function hasMarker(name: string, profile: ProviderProfile = NVIDIA_PROFILE): boolean {
+  return name.endsWith(profile.marker);
 }
 
-/** Anexa o marcador ao nome (idempotente). */
-export function addMarker(name: string): string {
-  return hasMarker(name) ? name : `${name}${NAME_MARKER}`;
+/** Anexa o marcador do perfil ao nome (idempotente). */
+export function addMarker(name: string, profile: ProviderProfile = NVIDIA_PROFILE): string {
+  return hasMarker(name, profile) ? name : `${name}${profile.marker}`;
 }

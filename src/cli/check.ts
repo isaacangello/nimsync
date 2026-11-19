@@ -10,19 +10,23 @@ import type { CliOptions } from "../types";
 export async function runCheck(opts: CliOptions): Promise<number> {
   const ctx = await loadContext(opts);
   const cacheNote = ctx.fromCache ? `${C.dim} (cache 6h; --refresh força re-download)${C.reset}` : "";
-  console.log(`${C.bold}nimsync${C.reset} — catálogo NVIDIA × ${ctx.configPath} (provider: ${ctx.providerId})`);
-  console.log(`  ${C.green}✓${C.reset} conta NVIDIA: ${ctx.report.stats.accountCount} modelos via /v1/models`);
-  console.log(`  ${C.green}✓${C.reset} models.dev: ${ctx.report.stats.metaCount} catalogados (nvidia)`);
-  console.log(`  ${C.green}✓${C.reset} site: ${ctx.report.stats.siteCount} cards em ~${Math.ceil(ctx.report.stats.siteCount / 24)} página(s)${cacheNote}`);
+  console.log(`${C.bold}nimsync${C.reset} — catálogo ${ctx.profile.label} × ${ctx.configPath} (provider: ${ctx.providerId})`);
+  console.log(`  ${C.green}✓${C.reset} conta ${ctx.profile.label}: ${ctx.report.stats.accountCount} modelos via /v1/models`);
+  console.log(`  ${C.green}✓${C.reset} models.dev: ${ctx.report.stats.metaCount} catalogados (${ctx.profile.catalogId})${ctx.profile.hasSite ? "" : cacheNote}`);
+  if (ctx.profile.hasSite) {
+    console.log(`  ${C.green}✓${C.reset} site: ${ctx.report.stats.siteCount} cards em ~${Math.ceil(ctx.report.stats.siteCount / 24)} página(s)${cacheNote}`);
+  } else {
+    console.log(`  ${C.dim}site de cards: não aplicável; descoberta por conta + models.dev + sondagem${C.reset}`);
+  }
   if (ctx.siteDegraded) {
     console.log(`  ${C.yellow}!${C.reset} site em modo degradado (SSR variou — parte dos cards veio do fallback RSC, sem badges)`);
   }
   console.log(`  ${C.dim}sondagens nesta execução: ${ctx.report.stats.probes}${C.reset}`);
   // proveniência (offline)
   try {
-    const cfg = readConfig(opts.config ?? `${process.env.HOME}/.config/opencode/opencode.jsonc`, opts.provider);
+    const cfg = readConfig(opts.config ?? `${process.env.HOME}/.config/opencode/opencode.jsonc`, opts.provider, opts.profile);
     const configured = configuredModels(cfg);
-    const managedIds = new Set(allManaged().map(([id]) => id));
+    const managedIds = new Set(allManaged(cfg.profile).map(([id]) => id));
     const managedConfigured = configured.filter((id) => managedIds.has(id)).length;
     console.log(
       `  ${C.dim}${managedConfigured}/${configured.length} configurados gerenciados pelo nimsync (nimsync list)${C.reset}`
@@ -34,7 +38,7 @@ export async function runCheck(opts: CliOptions): Promise<number> {
   if (opts.json) {
     console.log(JSON.stringify(ctx.report, null, 2));
   } else {
-    process.stdout.write(formatReport(ctx.report, C));
+    process.stdout.write(formatReport(ctx.report, C, ctx.profile));
   }
 
   const pending =

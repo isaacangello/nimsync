@@ -1,7 +1,7 @@
 {
   "name": "nimsync",
-  "version": "0.3.0",
-  "description": "Sincroniza o catálogo NVIDIA NIM (build.nvidia.com) com a whitelist de modelos do OpenCode",
+  "version": "0.4.0",
+  "description": "Sincroniza NVIDIA NIM e modelos gratuitos do AIHubMix com a whitelist do OpenCode",
   "type": "module",
   "license": "MIT",
   "bin": {
