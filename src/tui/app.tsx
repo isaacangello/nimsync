@@ -1,10 +1,11 @@
 // nimsync TUI — revisar e aplicar o report com checkboxes.
 // Teclas: ↑/↓ move · espaço marca/desmarca · a todos os novos · r todos os mortos
-//         c credencial (provider/dedicada) · enter -> confirmação y/n · q sai
+//         p inclui PAGOS (opt-in, recarrega) · c credencial · enter -> confirmação y/n · q sai
 //
 // SEGURANÇA (lição do incidente de 11/nov: um Enter desavisado aplicou tudo):
 //   - NADA vem pré-marcado: nem novos, nem remoção de mortos
 //   - Enter NÃO aplica direto: mostra o resumo e exige y/n explícito
+//   - PAGO é opt-in: sem 'p', rotas pagas nem aparecem como candidatos
 
 import React, { useState } from "react";
 import { render, Box, Text, useInput, useApp } from "ink";
@@ -21,11 +22,15 @@ const MAX_LIST = 25;
 interface Props {
   ctx: Ctx;
   opts: CliOptions;
+  reload: (opts: CliOptions) => Promise<Ctx>;
   onDone: (code: number) => void;
 }
 
-function TuiApp({ ctx, opts, onDone }: Props) {
+function TuiApp({ ctx: initialCtx, opts, reload, onDone }: Props) {
   const { exit } = useApp();
+  const [ctx, setCtx] = useState<Ctx>(initialCtx);
+  const [includePaid, setIncludePaid] = useState<Boolean>(opts.includePaid ?? false);
+  const [loading, setLoading] = useState(false);
   const news = addableRows(ctx.report);              // novos prontos (sondagem OK)
   const deads = removableRows(ctx.report);           // configurados mortos (404/410)
   const deprec = deprecatingConfigured(ctx.report);  // configurados deprecando
@@ -98,6 +103,21 @@ function TuiApp({ ctx, opts, onDone }: Props) {
         setRemoveDead((v) => !v);
       } else if (input === "c") {
         setDedicated((v) => !v);
+      } else if (input === "p") {
+        // opt-in pago: recarrega o report com/sem --include-paid
+        if (loading) return;
+        setLoading(true);
+        setError(null);
+        const next = !includePaid;
+        reload({ ...opts, provider: ctx.providerId, profile: ctx.profile.name, includePaid: next })
+          .then((c) => {
+            setCtx(c);
+            setIncludePaid(next);
+            setSelectedNew(new Set());
+            setCursor(0);
+          })
+          .catch((err) => setError(String(err instanceof Error ? err.message : err)))
+          .finally(() => setLoading(false));
       } else if (key.return) {
         if (pendingAdds.length === 0 && pendingRemoves.length === 0) {
           setError("nada selecionado — marque com espaço (ou a/r) antes de aplicar");
@@ -121,10 +141,11 @@ function TuiApp({ ctx, opts, onDone }: Props) {
       <Text bold color="green">
         {"\n"}NOVOS prontos ({selectedNew.size}/{news.length} marcados):
       </Text>
-      {news.length === 0 && <Text dimColor> nenhum</Text>}
+      {news.length === 0 && <Text dimColor> nenhum{!includePaid && ctx.profile.freeFilter ? " (pagos ocultos — 'p' inclui)" : ""}</Text>}
       {news.slice(0, MAX_LIST).map((r, i) => (
         <Text key={r.id} color={i === cursor ? "cyan" : undefined}>
-          {i === cursor ? "❯" : " "} [{selectedNew.has(r.id) ? "x" : " "}] {r.id}
+          {i === cursor ? "❯" : " "} [{selectedNew.has(r.id) ? "x" : " "}] {r.paidModel ? <Text color="magenta">[$] </Text> : null}
+          {r.id}
           <Text dimColor> [{effortValues(r.meta, ctx.profile).join("/") || "sem effort"}]</Text>
         </Text>
       ))}
@@ -184,7 +205,7 @@ function TuiApp({ ctx, opts, onDone }: Props) {
 
       <Box marginTop={1}>
         <Text dimColor>
-          ↑/↓ move · espaço marca · a todos novos · r todos mortos · c credencial · enter confirma · q sai
+          ↑/↓ move · espaço marca · a todos novos · r todos mortos · p pagos {includePaid ? "ON" : "off"} · c credencial · enter confirma · q sai
         </Text>
       </Box>
     </Box>
@@ -208,8 +229,9 @@ function toSpec(
 
 export async function runTui(opts: CliOptions): Promise<number> {
   const ctx = await loadContext(opts);
+  const reload = async (o: CliOptions): Promise<Ctx> => loadContext(o);
   return await new Promise<number>((resolve) => {
-    const instance = render(<TuiApp ctx={ctx} opts={opts} onDone={resolve} />);
+    const instance = render(<TuiApp ctx={ctx} opts={opts} reload={reload} onDone={resolve} />);
     void instance.waitUntilExit();
   });
 }

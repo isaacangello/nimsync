@@ -9,7 +9,8 @@ import type { ModelsDevModel } from "../types";
 const API_URL = "https://models.dev/api.json";
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6h
 
-type CatalogId = "nvidia" | "aihubmix";
+/** Qualquer id de catálogo do models.dev (nvidia, aihubmix, google, groq, openrouter, …). */
+type CatalogId = string;
 
 function cachePath(catalogId: CatalogId): string {
   // Mantém o arquivo NVIDIA legado; catálogos novos têm cache independente.
@@ -22,6 +23,7 @@ interface CacheEntry {
   models?: Record<string, ModelsDevModel>;
   nvidia?: Record<string, ModelsDevModel>; // formato legado <= 0.3.x
   aihubmix?: Record<string, ModelsDevModel>;
+  [catalogId: string]: unknown; // catálogos novos entram pelo campo "models"
 }
 
 async function fetchFresh(catalogId: CatalogId): Promise<Record<string, ModelsDevModel>> {
@@ -50,7 +52,7 @@ export async function fetchModelsDev(
     try {
       const file = Bun.file(cachePath(catalogId));
       const cached = (await file.json()) as CacheEntry;
-      const models = cached.models ?? cached[catalogId];
+      const models = (cached.models ?? cached[catalogId]) as Record<string, ModelsDevModel> | undefined;
       if (Date.now() - cached.fetchedAt < CACHE_TTL_MS && models) return models;
     } catch {
       // sem cache: busca

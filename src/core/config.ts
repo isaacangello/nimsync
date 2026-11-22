@@ -95,6 +95,7 @@ export interface AddSpec {
   output?: number;
   variants?: string[];
   credEnv?: string; // se definido, cria settings.apiKey "{env:VAR}" por modelo
+  paid?: boolean; // opt-in pago (--include-paid / toggle p) — apenas informativo
 }
 
 export function buildModelDef(
@@ -183,11 +184,11 @@ export function applyConfigEdits(
 
 function initialProviderDef(profile: ProviderProfile): Record<string, unknown> {
   return {
-    name: profile.name === "aihubmix" ? "AIHubMix (gratuitos)" : "NVIDIA (selecionados)",
-    package: "aisdk:@ai-sdk/openai-compatible",
+    name: profile.initialLabel,
+    package: profile.configPackage,
     settings: {
       apiKey: `{env:${profile.initApiKeyEnv}}`,
-      baseURL: profile.baseURL,
+      ...(profile.configBaseURL ? { baseURL: profile.baseURL } : {}),
       headerTimeout: 600000,
     },
     models: {},
@@ -229,9 +230,10 @@ export function initProvider(
   const problems: string[] = [];
   if (!created) problems.push("provider não foi inserido");
   else {
-    if (created.package !== "aisdk:@ai-sdk/openai-compatible") problems.push("package incorreto");
+    if (created.package !== profile.configPackage) problems.push("package incorreto");
     if (created.settings?.apiKey !== `{env:${profile.initApiKeyEnv}}`) problems.push("apiKey incorreta");
-    if (created.settings?.baseURL !== profile.baseURL) problems.push("baseURL incorreta");
+    if (profile.configBaseURL && created.settings?.baseURL !== profile.baseURL) problems.push("baseURL incorreta");
+    if (!profile.configBaseURL && created.settings?.baseURL != null) problems.push("baseURL não deveria existir");
     if (!created.models || Object.keys(created.models).length !== 0) problems.push("models inicial não está vazio");
   }
   if (problems.length > 0) {

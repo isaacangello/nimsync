@@ -15,7 +15,7 @@ const TTL_ALIVE = 24 * 60 * 60 * 1000;   // 24h
 const TTL_INCONCLUSIVE = 1 * 60 * 60 * 1000; // 1h
 const TTL_GONE = 7 * 24 * 60 * 60 * 1000;    // 7d (404/410 é estável)
 
-export type ProbeVerdict = "alive" | "alive-paid" | "gone" | "inconclusive";
+export type ProbeVerdict = "alive" | "alive-paid" | "alive-quota" | "gone" | "inconclusive";
 
 interface SlugMapEntry {
   apiId: string;
@@ -94,9 +94,14 @@ export async function resolveSlugId(
   const m = map();
   const hit = m[key];
   if (!opts.refresh && hit) {
-    const ttl = hit.verdict === "alive" || hit.verdict === "alive-paid" ? TTL_ALIVE : hit.verdict === "gone" ? TTL_GONE : TTL_INCONCLUSIVE;
+    const ttl =
+      hit.verdict === "alive" || hit.verdict === "alive-paid" || hit.verdict === "alive-quota"
+        ? TTL_ALIVE
+        : hit.verdict === "gone"
+          ? TTL_GONE
+          : TTL_INCONCLUSIVE;
     if (Date.now() - hit.probedAt < ttl) {
-      const available = hit.verdict === "alive" || hit.verdict === "alive-paid";
+      const available = hit.verdict === "alive" || hit.verdict === "alive-paid" || hit.verdict === "alive-quota";
       return { apiId: available ? hit.apiId : undefined, verdict: hit.verdict, probed: false };
     }
   }
@@ -111,7 +116,7 @@ export async function resolveSlugId(
   // sequencial: o primeiro "alive" encerra; 404s são instantâneos
   for (const v of variants) {
     const r = await probeChatModel(apiKey, v, opts.timeoutMs ?? 20_000, opts.profile);
-    if (r === "alive" || r === "alive-paid") {
+    if (r === "alive" || r === "alive-paid" || r === "alive-quota") {
       verdict = r;
       apiId = v;
       break;
@@ -126,5 +131,9 @@ export async function resolveSlugId(
   }
   m[key] = { apiId: apiId ?? variants[0], verdict, probedAt: Date.now() };
   save(m);
-  return { apiId: verdict === "alive" || verdict === "alive-paid" ? apiId : undefined, verdict, probed: true };
+  return {
+    apiId: verdict === "alive" || verdict === "alive-paid" || verdict === "alive-quota" ? apiId : undefined,
+    verdict,
+    probed: true,
+  };
 }

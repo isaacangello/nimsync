@@ -7,6 +7,8 @@
 //     é inconclusivo (mostrado, nunca agido)
 //   - modelos CONFIGURADOS sempre aparecem no relatório, mesmo que tenham sumido
 //     de todas as fontes (fantasmas), e são sondados quando necessário
+//   - PAGO é decisão do usuário: sem --include-paid, rotas pagas ficam fora da
+//     whitelist; com ele, entram como candidatos explícitos ([$])
 
 import { normKey } from "./normalize";
 import { NVIDIA_PROFILE, type ProviderProfile } from "./profile";
@@ -23,6 +25,8 @@ export interface ReportInputs {
   refresh?: boolean;
   noProbe?: boolean;
   timeoutMs?: number;
+  /** opt-in explícito: candidatos pagos (freemium) entram na whitelist */
+  includePaid?: boolean;
 }
 
 const metaByNorm = (meta: Record<string, ModelsDevModel>): Map<string, ModelsDevModel> => {
@@ -43,7 +47,6 @@ function looksNonChat(text?: string): boolean {
 
 export async function computeReport(inputs: ReportInputs): Promise<Report> {
   const profile = inputs.profile ?? NVIDIA_PROFILE;
-  const isAIHubMix = profile.name === "aihubmix";
   const meta = metaByNorm(inputs.meta);
   const accountSet = new Set(inputs.account.map(normKey));
   const cfgSet = new Set(inputs.configured.map(normKey));
@@ -86,7 +89,7 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
 
     if (configured) {
       if (!accountSet.has(key)) {
-        base.status = "inconclusive"; // sondagem decide (lote 4a)
+        base.status = "inconclusive"; // sondagem decide (lote 5a)
         base.note = "aguardando sondagem (fora do /v1/models)";
       } else {
         base.status = "alive";
@@ -111,7 +114,7 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
     if (rows.has(key)) continue;
     const m = meta.get(key);
     const configured = cfgSet.has(key);
-    const free = isAIHubMix ? profile.isFree(id, m) : undefined;
+    const free = profile.freeFilter ? profile.isFree(id, m) : undefined;
     const row: ModelRow = {
       id,
       name: m?.name,
@@ -122,15 +125,27 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
       meta: m,
     };
 
-    if (isAIHubMix) {
+    if (profile.probeDirect) {
+      // profiles sem site: listagem da conta não garante a rota
       if (configured) {
-        row.status = "unverified";
-        row.note = "aguardando sondagem (a listagem da conta não garante a rota)";
-      } else if (!free) {
-        row.status = "notfree";
-        row.note = "modelo pago — listado na conta, mas fora da whitelist gratuita";
+        if (profile.probeAccountConfigured) {
+          row.status = "unverified";
+          row.note = "aguardando sondagem (a listagem da conta não garante a rota)";
+        } else {
+          row.status = "alive";
+        }
+      } else if (profile.freeFilter && !free) {
+        // freemium: pago por padrão; com --include-paid vira candidato explícito
+        if (inputs.includePaid) {
+          row.paidModel = true;
+          row.freeEndpoint = true;
+          row.note = "[$] pago — incluído por opt-in (--include-paid)";
+        } else {
+          row.status = "notfree";
+          row.note = "modelo pago — listado na conta, mas fora da whitelist gratuita";
+        }
       }
-      // gratuito não configurado fica unverified e será sondado, mesmo estando na conta
+      // gratuito não configurado fica unverified e será sondado, conforme o perfil
     } else if (!m) {
       row.status = "nonchat";
       row.note = "na sua conta, sem metadados (provavelmente embedding/rerank/visão)";
@@ -146,21 +161,35 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
     const key = normKey(id);
     if (rows.has(key)) continue;
     const configured = cfgSet.has(key);
-    const free = isAIHubMix ? profile.isFree(id, m) : undefined;
+    const free = profile.freeFilter ? profile.isFree(id, m) : undefined;
+    const isFreeProfile = profile.probeDirect && !profile.freeFilter; // google/groq: catálogo todo elegível
     rows.set(key, {
       id,
       name: m.name,
       origin: "md",
       configured,
-      status: isAIHubMix && !configured && !free ? "notfree" : "unverified",
-      freeEndpoint: free,
+      status:
+        profile.freeFilter && !configured && !free
+          ? inputs.includePaid
+            ? "unverified"
+            : "notfree"
+          : "unverified",
+      freeEndpoint: profile.freeFilter ? free : isFreeProfile ? true : undefined,
+      paidModel: profile.freeFilter && !free && inputs.includePaid ? true : undefined,
       meta: m,
-      note: isAIHubMix
+      note: profile.freeFilter
         ? free || configured
           ? "gratuito no models.dev, fora do /v1/models — aguardando sondagem"
           : "modelo pago no models.dev — fora da whitelist gratuita"
-        : "só no models.dev — sem card no site e fora do /v1/models",
+        : isFreeProfile
+          ? "só no models.dev, fora da listagem da conta — sonda antes de usar"
+          : "só no models.dev — sem card no site e fora do /v1/models",
     });
+    if (profile.freeFilter && !free && inputs.includePaid) {
+      const r = rows.get(key)!;
+      r.freeEndpoint = true;
+      r.note = "[$] pago — incluído por opt-in (--include-paid)";
+    }
   }
 
   // ---------- 4) FANTASMAS: configurados que não aparecem em nenhuma fonte
@@ -172,7 +201,7 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
       origin: "account",
       configured: true,
       status: "inconclusive", // sondagem decide
-      freeEndpoint: isAIHubMix ? profile.isFree(id) : undefined,
+      freeEndpoint: profile.freeFilter ? profile.isFree(id) : undefined,
       note: "na config, mas sumiu de site, conta e models.dev — aguardando sondagem",
     });
   }
@@ -180,7 +209,7 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
   const probeDirect = async (row: ModelRow): Promise<ResolveResult> => {
     const verdict = await probeChatModel(inputs.apiKey, row.id, inputs.timeoutMs ?? 20_000, profile);
     return {
-      apiId: verdict === "alive" || verdict === "alive-paid" ? row.id : undefined,
+      apiId: verdict === "alive" || verdict === "alive-paid" || verdict === "alive-quota" ? row.id : undefined,
       verdict,
       probed: true,
     };
@@ -191,82 +220,103 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
   if (!inputs.noProbe) {
     const queue: Array<() => Promise<void>> = [];
 
+    const applyConfiguredVerdict = (row: ModelRow, r: ResolveResult): void => {
+      if (r.verdict === "alive") {
+        row.status =
+          row.deprecationDays != null || (profile.freeFilter && row.meta?.status === "deprecated")
+            ? "deprecating"
+            : "alive";
+        if (profile.freeFilter && row.meta?.status === "deprecated") row.deprecationSource = "modelsdev";
+        if (row.note?.includes("sondagem") || row.note?.includes("listagem")) row.note = undefined;
+        if (!accountSet.has(normKey(row.id)) && row.status === "alive" && !profile.probeAccountConfigured) {
+          row.status = "deprecating";
+          row.note = "fora do /v1/models mas AINDA RESPONDE (sunset) — remova só quando parar";
+        }
+      } else if (r.verdict === "alive-quota") {
+        row.status = row.deprecationDays != null ? "deprecating" : "alive";
+        row.note = "429 — vivo, mas em cota/rate-limit (free tier)";
+      } else if (r.verdict === "alive-paid") {
+        row.status = "paid";
+        row.note = "rota existe, mas respondeu bloqueio de saldo — NÃO é modelo morto";
+      } else if (r.verdict === "gone") {
+        row.status = "dead";
+        row.note = profile.hasSite
+          ? "sondagem confirmou o fim (HTTP 410 Gone / 404)"
+          : "sondagem confirmou o fim (model_retired / sem canal / 404)";
+      } else {
+        row.status = "deprecating";
+        row.note = "sondagem inconclusiva (fila/thinking/rede) — NÃO removido automaticamente";
+      }
+    };
+
+    const probeRow = async (row: ModelRow): Promise<ResolveResult> => {
+      probes++;
+      if (profile.probeDirect) return probeDirect(row);
+      const s = slugOf(row.id);
+      return resolveSlugId(s.publisher, s.slug, inputs.apiKey, {
+        knownId: accountSet.has(normKey(row.id)) ? row.id : row.meta?.id,
+        refresh: inputs.refresh,
+        timeoutMs: inputs.timeoutMs,
+        profile,
+      });
+    };
+
     // 5a. TODOS os configurados em dúvida + fantasma: sondar
     for (const row of rows.values()) {
       if (row.configured && (row.status === "inconclusive" || row.status === "unverified")) {
         queue.push(async () => {
-          probes++;
-          let r: ResolveResult;
-          if (isAIHubMix) {
-            r = await probeDirect(row);
-          } else {
-            const s = slugOf(row.id);
-            r = await resolveSlugId(s.publisher, s.slug, inputs.apiKey, {
-              knownId: accountSet.has(normKey(row.id)) ? row.id : undefined,
-              refresh: inputs.refresh,
-              timeoutMs: inputs.timeoutMs,
-              profile,
-            });
-          }
-          if (r.verdict === "alive") {
-            row.status = row.deprecationDays != null || (isAIHubMix && row.meta?.status === "deprecated") ? "deprecating" : "alive";
-            if (isAIHubMix && row.meta?.status === "deprecated") row.deprecationSource = "modelsdev";
-            if (row.note?.includes("sondagem") || row.note?.includes("listagem")) row.note = undefined;
-            if (!accountSet.has(normKey(row.id)) && row.status === "alive") {
-              row.status = "deprecating";
-              row.note = "fora do /v1/models mas AINDA RESPONDE (sunset) — remova só quando parar";
-            }
-          } else if (r.verdict === "alive-paid") {
-            row.status = "paid";
-            row.note = "rota existe, mas respondeu 403 por saldo insuficiente — NÃO é modelo morto";
-          } else if (r.verdict === "gone") {
-            row.status = "dead";
-            row.note = isAIHubMix
-              ? "sondagem confirmou model_retired/no_available_channel"
-              : "sondagem confirmou o fim (HTTP 410 Gone / 404)";
-          } else {
-            row.status = "deprecating";
-            row.note = "sondagem inconclusiva (fila/thinking/rede) — NÃO removido automaticamente";
-          }
+          const r = await probeRow(row);
+          applyConfiguredVerdict(row, r);
         });
       }
     }
 
-    // 5b. novos candidatos gratuitos — sondar + filtrar chat
+    // 5b. novos candidatos — sondar + filtrar chat
+    const isCandidate = (row: ModelRow): boolean => {
+      if (row.configured) return false;
+      if (row.freeEndpoint) return true; // site-free (NVIDIA) · gratuito (freemium) · opt-in pago
+      // google/groq (sem filtro de gratuidade): só o que a CONTA lista é candidato
+      return !profile.freeFilter && profile.probeDirect && accountSet.has(normKey(row.id));
+    };
     for (const row of rows.values()) {
-      if (!row.configured && row.freeEndpoint && row.status === "unverified") {
+      if (isCandidate(row) && row.status === "unverified") {
         queue.push(async () => {
+          // contas confiáveis p/ candidatos: sem sondagem (economiza cota)
           if (accountSet.has(normKey(row.id)) && !profile.probeAccountCandidates) {
             markChatWorthiness(row);
             if (row.status === "unverified") row.status = "new-ready";
             return;
           }
-          probes++;
-          let r: ResolveResult;
-          if (isAIHubMix) {
-            r = await probeDirect(row);
-          } else {
-            const s = slugOf(row.id);
-            r = await resolveSlugId(s.publisher, s.slug, inputs.apiKey, {
-              knownId: row.meta?.id,
-              refresh: inputs.refresh,
-              timeoutMs: inputs.timeoutMs,
-              profile,
-            });
-          }
+          const r = await probeRow(row);
           if (r.verdict === "alive") {
             if (r.apiId && normKey(r.apiId) !== normKey(row.id)) row.apiId = r.apiId;
             markChatWorthiness(row);
             if (row.status === "unverified") row.status = "new-ready";
+          } else if (r.verdict === "alive-quota") {
+            markChatWorthiness(row);
+            if (row.status === "unverified") {
+              row.status = "new-ready";
+              row.note = "429 — vivo, mas em cota/rate-limit (free tier)";
+            }
           } else if (r.verdict === "alive-paid") {
-            row.status = "notfree";
-            row.freeEndpoint = false;
-            row.note = "rota existe, mas exige saldo (403) — não entra na whitelist gratuita";
+            if (row.paidModel) {
+              // opt-in pago sem saldo: não utilizável de fato
+              row.status = "notfree";
+              row.freeEndpoint = false;
+              row.paidModel = false;
+              row.note = "rota existe, mas exige saldo (403) — topie o saldo ou remova o opt-in";
+            } else {
+              row.status = "notfree";
+              row.freeEndpoint = false;
+              row.note = "rota existe, mas exige saldo (403) — não entra na whitelist gratuita";
+            }
           } else if (r.verdict === "gone") {
             row.status = "dead";
-            row.note = isAIHubMix
-              ? "ID gratuito listado, mas aposentado/sem canal — não utilizável"
-              : "badge Free Endpoint, mas o endpoint responde 404/410 — não utilizável (ainda)";
+            row.note = profile.hasSite
+              ? "badge Free Endpoint, mas o endpoint responde 404/410 — não utilizável (ainda)"
+              : row.paidModel
+                ? "ID pago listado, mas aposentado/sem canal — não utilizável"
+                : "ID gratuito listado, mas aposentado/sem canal — não utilizável";
           } else {
             row.status = "inconclusive";
             row.note = "sondagem inconclusiva (fila/rede) — rode de novo mais tarde";
@@ -309,13 +359,17 @@ export async function computeReport(inputs: ReportInputs): Promise<Report> {
     notfree: 7,
     nonchat: 8,
   } as const;
+  const wantSection1 = (row: ModelRow): boolean => {
+    if (row.configured) return true; // conjunto ativo do usuário
+    if (row.freeEndpoint || row.paidModel) return true;
+    // google/groq: o que a conta lista é a oferta real — seção 1
+    if (profile.probeDirect && !profile.freeFilter && row.origin === "account") return true;
+    return false;
+  };
   for (const row of rows.values()) {
     if (row.status === "nonchat") {
       report.rest.push(row);
-    } else if (row.configured) {
-      // configurados SEMPRE na seção 1 — é o conjunto ativo do usuário
-      report.freeEndpoint.push(row);
-    } else if (row.freeEndpoint) {
+    } else if (wantSection1(row)) {
       report.freeEndpoint.push(row);
     } else if (row.status === "notfree") {
       report.noFreeEndpoint.push(row);

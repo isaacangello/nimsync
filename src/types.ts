@@ -57,6 +57,8 @@ export interface ModelRow {
   configured: boolean;
   status: RowStatus;
   freeEndpoint?: boolean;
+  /** rota paga incluída por decisão explícita (--include-paid / toggle p) */
+  paidModel?: boolean;
   deprecationDays?: number;
   deprecationSource?: "site" | "modelsdev";
   description?: string;
@@ -105,4 +107,12 @@ export interface CliOptions {
   timeoutMs?: number;
   restart?: boolean;
   noProbe?: boolean;
+  /** incluir modelos/rotas PAGAS como candidatos (nunca é o default) */
+  includePaid?: boolean;
+  /** init --profile custom: endpoint do provider */
+  baseUrl?: string;
+  /** init --profile custom: env var da chave */
+  keyEnv?: string;
+  /** init --profile custom: marcador de exibição (default: derivado do provider id) */
+  marker?: string;
 }

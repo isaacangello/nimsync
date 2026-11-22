@@ -1,49 +1,59 @@
 #!/usr/bin/env bun
-// nimsync — sincroniza NVIDIA NIM e AIHubMix com a whitelist do OpenCode.
+// nimsync — sincroniza providers de IA com a whitelist de modelos do OpenCode.
+// Filosofia: GRÁTIS primeiro (chave gratuita) · freemium com opt-in · pago só se você pedir.
 //
-//   nimsync            TUI interativa (checkboxes, preview, aplicar)
-//   nimsync init       cria o provider selecionado (backup + validação)
-//   nimsync check      relatório de novos/mortos/deprecando (não escreve)
-//   nimsync update     aplica mudanças (backup automático; --yes/--all/--dry-run)
-//   nimsync list       modelos configurados com origem (✦ nimsync / · manual)
-//   nimsync doctor     testa cada modelo configurado com request mínima
+//   nimsync                TUI interativa (checkboxes, preview, aplicar)
+//   nimsync providers      painel de provedores: tier, chave, estado (read-only)
+//   nimsync init           cria provider (+ wizard de onboarding e perfis custom)
+//   nimsync check          relatório de TODOS os providers configurados (não escreve)
+//   nimsync update         aplica mudanças num provider (backup + validação c/ rollback)
+//   nimsync list           modelos configurados com origem (offline)
+//   nimsync doctor         testa cada modelo configurado com request mínima
 
 import type { CliOptions } from "./types";
 import { isProfileName } from "./core/profile";
 import { version as VERSION } from "../package.json";
 
-const HELP = `nimsync v${VERSION} — NVIDIA NIM + AIHubMix ↔ OpenCode
+const HELP = `nimsync v${VERSION} — providers de IA ↔ OpenCode (grátis primeiro)
 
 USO
   nimsync [comando] [flags]
 
 COMANDOS
   tui (default)   painel interativo: revisar novos/mortos/deprecando e aplicar
-  init            cria o bloco do provider sem alterar providers existentes
-  check           relatório no terminal; não escreve nada (exit 1 = pendências)
-  update          aplica na config (backup automático + validação com rollback)
+  providers       painel de provedores: tier (free/freemium/paid/local), chave, estado
+  init            cria o provider no opencode.jsonc (+ wizard se nada configurado)
+  check           relatório de TODOS os providers configurados (exit 1 = pendências)
+  update          aplica mudanças num provider (backup automático + rollback)
   list            modelos configurados com origem (offline; não escreve)
   doctor          request mínima para cada modelo configurado (chave, latência, rota)
 
-FLAGS
-  --profile <nome>   nvidia (default) ou aihubmix
-  --config <path>    caminho do opencode.jsonc (default: ~/.config/opencode/opencode.jsonc)
-  --provider <id>    id do provider na config; "aihubmix" também infere o perfil
-  --refresh          ignora cache (6h) das fontes
-  --yes              aceita defaults sem perguntar (update: remove mortos; adiciona só com --all)
-  --all              adiciona todos os novos LLMs de chat gratuitos/elegíveis (update)
-  --dry-run          mostra o plano/prévia sem escrever (init/update)
-  --json             saída estruturada (init/check/update)
-  --timeout-ms <n>   timeout por request (sondagens/doctor; default do doctor: 60000)
-  -h, --help         esta ajuda
-  -V, --version      versão
+PROVIDERS BUILT-IN
+  nvidia       free      NVIDIA NIM trial (build.nvidia.com)        marcador " ·NIM"
+  google       free      Google AI Studio (cota por conta)          marcador " ·GEM"
+  groq         free      Groq (cota por conta)                      marcador " ·GROQ"
+  openrouter   freemium  só IDs ":free" entram por padrão           marcador " ·OR"
+  aihubmix     freemium  só "-free/:free" entram por padrão         marcador " ·MIX"
+  custom       paid      qualquer endpoint OpenAI-compatible (seu)
 
-AIHUBMIX
-  nimsync init --profile aihubmix
-  nimsync check --provider aihubmix --refresh
-  nimsync update --provider aihubmix --yes --all
-  Somente IDs terminados em -free/:free ou custo 0/0 no models.dev entram por padrão.
-  Chave: AIHUBMIX_API_KEY, com fallback para AIHUBMIX. Marcador no /models: " ·MIX".
+FLAGS
+  --profile <nome>   nvidia | google | groq | openrouter | aihubmix | custom
+  --config <path>    caminho do opencode.jsonc (default: ~/.config/opencode/opencode.jsonc)
+  --provider <id>    id do provider na config; também infere o perfil
+  --refresh          ignora cache (6h) das fontes
+  --include-paid     incluir modelos PAGOS como candidatos (freemium; nunca é default)
+  --yes              aceita defaults sem perguntar (update: remove mortos; adiciona só com --all)
+  --all              adiciona todos os novos elegíveis (update)
+  --dry-run          mostra o plano/prévia sem escrever (init/update)
+  --json             saída estruturada (providers/init/check/update)
+  --timeout-ms <n>   timeout por request (sondagens/doctor; default do doctor: 60000)
+
+INIT CUSTOM (qualquer gateway OpenAI-compatible)
+  nimsync init --profile custom --provider meugateway \\
+    --base-url https://meugateway.example/v1 --key-env MEUGATEWAY_API_KEY [--marker " ·GW"]
+
+ONBOARDING
+  nimsync init   (sem nenhum provider) → wizard: grátis primeiro, mostra onde criar a chave
 
 FONTES DE DADOS
   1. /v1/models na sua conta + sondagem real (a listagem sozinha não é veredito)
@@ -58,6 +68,7 @@ function parseArgs(argv: string[]): { command?: string; opts: CliOptions; help: 
   let command: string | undefined;
   let help = false;
   let version = false;
+  const flagsWithArg = new Set(["--config", "--provider", "--profile", "--timeout-ms", "--base-url", "--key-env", "--marker"]);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -69,17 +80,23 @@ function parseArgs(argv: string[]): { command?: string; opts: CliOptions; help: 
     else if (a === "--json") opts.json = true;
     else if (a === "--restart") opts.restart = true;
     else if (a === "--no-probe") opts.noProbe = true;
-    else if (a === "--config" || a === "--provider" || a === "--profile" || a === "--timeout-ms") {
+    else if (a === "--include-paid") opts.includePaid = true;
+    else if (flagsWithArg.has(a)) {
       const value = argv[++i];
       if (!value) throw new Error(`${a} exige um valor`);
       if (a === "--config") opts.config = value;
       else if (a === "--provider") opts.provider = value;
+      else if (a === "--base-url") opts.baseUrl = value;
+      else if (a === "--key-env") opts.keyEnv = value;
+      else if (a === "--marker") opts.marker = value;
       else if (a === "--timeout-ms") {
         const timeout = Number(value);
         if (!Number.isFinite(timeout) || timeout <= 0) throw new Error("--timeout-ms deve ser um número positivo");
         opts.timeoutMs = timeout;
       } else {
-        if (!isProfileName(value)) throw new Error(`perfil desconhecido: ${value} (use nvidia ou aihubmix)`);
+        if (!isProfileName(value)) {
+          throw new Error(`perfil desconhecido: ${value} (use nvidia|google|groq|openrouter|aihubmix|custom)`);
+        }
         opts.profile = value;
       }
     } else if (!a.startsWith("-") && !command) command = a;
@@ -101,6 +118,8 @@ async function main(): Promise<number> {
   }
   const cmd = command ?? "tui";
   switch (cmd) {
+    case "providers":
+      return await import("./cli/providers").then((m) => m.runProviders(opts));
     case "init":
       return await import("./cli/init").then((m) => m.runInit(opts));
     case "check":

@@ -19,6 +19,11 @@ import type { CliOptions, ModelRow } from "../types";
 
 
 export async function runUpdate(opts: CliOptions): Promise<number> {
+  if (!opts.provider && !opts.profile) {
+    console.error(`update opera por provider — rode nimsync check (multi) e depois:`);
+    console.error(`  nimsync update --provider <id> [--yes] [--all]${opts.includePaid ? " [--include-paid]" : ""}`);
+    return 2;
+  }
   const ctx = await loadContext(opts);
   const { report, profile } = ctx;
   const interactive = Boolean(stdin.isTTY) && !opts.yes && !opts.json;
@@ -26,6 +31,15 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
   const plannedRemoves = removableRows(report).map((r) => r.id);
   let plannedAdds: AddSpec[] = addableRows(report).map((r) => toAddSpec(r, profile));
   const deprecating = deprecatingConfigured(report);
+
+  if (plannedAdds.length === 0 && !opts.includePaid && profile.freeFilter) {
+    const paidCandidates = report.noFreeEndpoint.filter((r) => r.status === "notfree").length;
+    if (paidCandidates > 0) {
+      console.log(
+        `  ${C.dim}${paidCandidates} modelo(s) pago(s) fora da whitelist — use --include-paid como opt-in${C.reset}`
+      );
+    }
+  }
 
   // ---- decisão: remover mortos
   if (plannedRemoves.length > 0) {
@@ -49,9 +63,15 @@ export async function runUpdate(opts: CliOptions): Promise<number> {
     } else if (opts.yes) {
       plannedAdds = []; // --yes sem --all: conservador
     } else if (interactive) {
-      console.log(`${C.green}Novos modelos disponíveis (${profile.name === "aihubmix" ? "gratuitos" : "Free Endpoint"} + sondagem OK):${C.reset}`);
+      console.log(
+        `${C.green}Novos modelos disponíveis (${
+          profile.hasSite ? "Free Endpoint" : profile.freeFilter ? "gratuitos" : "elegíveis"
+        } + sondagem OK):${C.reset}`
+      );
       plannedAdds.forEach((s, i) =>
-        console.log(`  ${i + 1}. ${s.id} ${C.dim}[${s.variants?.join("/") ?? "sem effort"}]${C.reset}`)
+        console.log(
+          `  ${i + 1}. ${s.paid ? `${C.magenta}[$]${C.reset} ` : ""}${s.id} ${C.dim}[${s.variants?.join("/") ?? "sem effort"}]${C.reset}`
+        )
       );
       const ans = await ask("Adicionar: (t)odos / (e)scolher / (n)enhum? [t/e/n] ");
       if (/^n/i.test(ans)) {
@@ -172,6 +192,7 @@ function toAddSpec(row: ModelRow, profile: import("../core/profile").ProviderPro
     context: row.meta?.limit?.context,
     output: row.meta?.limit?.output,
     variants: effortValues(row.meta, profile),
+    paid: row.paidModel,
   };
 }
 
@@ -184,10 +205,23 @@ function loadConfigForWrite(opts: CliOptions) {
   return readConfig(opts.config ?? defaultConfigPath(), opts.provider, opts.profile);
 }
 
+/** Pergunta interativa. EOF (Ctrl+D) resolve vazio em vez de travar. */
 async function ask(prompt: string): Promise<string> {
   const rl = createInterface({ input: stdin, output: stdout });
   try {
-    return (await rl.question(prompt)).trim();
+    return await new Promise<string>((resolve) => {
+      let settled = false;
+      const finish = (v: string): void => {
+        if (settled) return;
+        settled = true;
+        resolve(v.trim());
+      };
+      rl.once("close", () => finish(""));
+      rl.question(prompt).then(
+        (answer) => finish(answer),
+        () => finish("")
+      );
+    });
   } finally {
     rl.close();
   }

@@ -10,7 +10,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { version as VERSION } from "../../package.json";
-import { NVIDIA_PROFILE, type ProviderProfile } from "./profile";
+import { NVIDIA_PROFILE, customProfileFromDef, type CustomProfileDef, type ProviderProfile } from "./profile";
 
 /** Marcador NVIDIA legado; novos códigos devem usar cfg.profile.marker. */
 export const NAME_MARKER = NVIDIA_PROFILE.marker;
@@ -121,4 +121,50 @@ export function hasMarker(name: string, profile: ProviderProfile = NVIDIA_PROFIL
 /** Anexa o marcador do perfil ao nome (idempotente). */
 export function addMarker(name: string, profile: ProviderProfile = NVIDIA_PROFILE): string {
   return hasMarker(name, profile) ? name : `${name}${profile.marker}`;
+}
+
+// ---------- perfis custom (init --profile custom) ----------
+
+function profilesPath(): string {
+  const stateHome = process.env.XDG_STATE_HOME || `${homedir()}/.local/state`;
+  return `${stateHome}/nimsync/profiles.json`;
+}
+
+type CustomProfiles = Record<string, CustomProfileDef>;
+
+function loadProfiles(): CustomProfiles {
+  try {
+    return JSON.parse(readFileSync(profilesPath(), "utf8")) as CustomProfiles;
+  } catch {
+    return {};
+  }
+}
+
+function saveProfiles(map: CustomProfiles): void {
+  try {
+    const stateHome = process.env.XDG_STATE_HOME || `${homedir()}/.local/state`;
+    mkdirSync(`${stateHome}/nimsync`, { recursive: true });
+    writeFileSync(profilesPath(), JSON.stringify(map, null, 1));
+  } catch {
+    // best-effort
+  }
+}
+
+export function saveCustomProfile(def: CustomProfileDef): void {
+  const map = loadProfiles();
+  map[def.providerId] = def;
+  saveProfiles(map);
+}
+
+export function removeCustomProfile(providerId: string): void {
+  const map = loadProfiles();
+  if (providerId in map) {
+    delete map[providerId];
+    saveProfiles(map);
+  }
+}
+
+/** Perfis custom persistidos, como ProviderProfile prontos para uso. */
+export function allCustomProfiles(): ProviderProfile[] {
+  return Object.values(loadProfiles()).map(customProfileFromDef);
 }

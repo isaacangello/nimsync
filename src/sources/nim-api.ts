@@ -34,7 +34,7 @@ export async function probeChatModel(
   timeoutMs = 30_000,
   baseURL = NIM_BASE,
   profile: ProviderProfile = NVIDIA_PROFILE
-): Promise<"alive" | "alive-paid" | "gone" | "inconclusive"> {
+): Promise<"alive" | "alive-paid" | "alive-quota" | "gone" | "inconclusive"> {
   try {
     const res = await fetch(`${baseURL.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
