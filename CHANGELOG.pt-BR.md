@@ -4,6 +4,23 @@
 
 ## [Não lançado]
 
+## [0.6.0] - 2026-11-22
+
+### Adicionado
+
+- `nimsync add <id...>` adiciona modelos por ID com sonda obrigatória (`--no-probe` para emergência)
+- `nimsync remove <id...>` remove modelos por ID (vivo ou morto) e limpa a proveniência
+- `nimsync refresh-meta` atualiza `limit.context/output` e `variants` dos modelos configurados, mostrando o diff antes
+- `nimsync restore` (alias `reset`) lista e restaura backups `.bak-nimsync-<ts>`, salvando o estado atual antes
+- `nimsync uninstall --provider <id>` remove o bloco do provider, a proveniência e o registro do perfil custom
+- `--json` sempre imprime o plano e nunca escreve, `--yes` aplica sem perguntar
+
+### Corrigido
+
+- A proveniência de providers custom é isolada por provider (`custom:<provider-id>:<id>`), então desinstalar um gateway não limpa mais outro
+- A resolução de perfil agora considera os perfis custom registrados
+- A comparação de proveniência é normalizada (`kimi-k3_1-pro` casa com `kimi-k3.1-pro`)
+
 ## [0.5.0] - 2026-11-22
 
 ### Adicionado

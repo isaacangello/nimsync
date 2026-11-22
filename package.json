@@ -1,6 +1,6 @@
 {
   "name": "nimsync-cli",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Sync free-first AI provider models (NVIDIA NIM, Google AI Studio, Groq, OpenRouter, AIHubMix, custom) with the OpenCode model whitelist",
   "type": "module",
   "license": "MIT",
