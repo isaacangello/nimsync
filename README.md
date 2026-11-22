@@ -22,10 +22,12 @@ paru -S nimsync-bin
 ### From npm (requires Bun)
 
 ```bash
-npm install -g nimsync
+npm install -g nimsync-cli
 nimsync --version
 nimsync-stats --help
 ```
+
+> The npm package is `nimsync-cli` (the `nimsync` name is taken by another package); the installed command is still `nimsync`.
 
 ### From source
 

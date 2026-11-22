@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - "v*.*.*"
+  # publicação manual (ex.: quando o tag já existe e só o nome do pacote mudou)
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versão a publicar (ex: 0.5.0)"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -45,8 +52,15 @@ jobs:
           test -x scripts/nimsync-stats.sh
 
       - name: Check tag and package version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            TAG_VERSION="${INPUT_VERSION}"
+          else
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+          fi
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           echo "Tag: ${TAG_VERSION}; package: ${PACKAGE_VERSION}"
           test "${TAG_VERSION}" = "${PACKAGE_VERSION}"
