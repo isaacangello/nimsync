@@ -4,3 +4,8 @@ dist/
 .DS_Store
 session.opc
 .idea/
+
+# tokens npm gravados acidentalmente no cwd (npm cria npm_<token> quando o
+# userconfig não é gravável) — nunca versionar
+npm_*
+.npmrc
