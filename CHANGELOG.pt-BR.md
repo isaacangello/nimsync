@@ -16,7 +16,7 @@
 - Novo veredito `alive-quota` (HTTP 429 significa vivo, mas com cota/rate-limit) que nunca remove um modelo
 - Perfis custom registrados por `init --profile custom` e guardados em `~/.local/state/nimsync/profiles.json`
 - Comando `nimsync-stats` com downloads do GitHub Releases, stars/forks do repositório, métricas de adoção no AUR e modo `--watch` com atualização a cada 60 segundos
-- Metadados do pacote npm e workflow do GitHub Actions disparado por tags `v*.*.*`, validando e publicando o pacote com provenance usando `NPM_TOKEN`
+- Pacote npm `nimsync-cli` publicado com provenance (`npm install -g nimsync-cli`; o comando instalado é `nimsync`)
 
 ### Corrigido
 
