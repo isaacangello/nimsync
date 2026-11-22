@@ -11,6 +11,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { version as VERSION } from "../../package.json";
 import { NVIDIA_PROFILE, customProfileFromDef, type CustomProfileDef, type ProviderProfile } from "./profile";
+import { normKey } from "./normalize";
 
 /** Marcador NVIDIA legado; novos códigos devem usar cfg.profile.marker. */
 export const NAME_MARKER = NVIDIA_PROFILE.marker;
@@ -51,8 +52,22 @@ function save(map: ManagedMap): void {
   }
 }
 
+/**
+ * Namespace da proveniência por perfil.
+ * - null (NVIDIA legado): a chave é o próprio id do modelo
+ * - built-ins: "<nome>:<id>" (ex.: "aihubmix:gpt-4o-mini")
+ * - custom: "custom:<provider-id>:<id>" — cada endpoint custom tem o seu
+ *   namespace, senão dois gateways diferentes colidiria no mesmo registro.
+ */
+function managedPrefix(profile: ProviderProfile): string | null {
+  if (profile.name === "nvidia") return null;
+  if (profile.name === "custom") return `custom:${profile.providerId}:`;
+  return `${profile.name}:`;
+}
+
 function managedKey(id: string, profile: ProviderProfile): string {
-  return profile.name === "nvidia" ? id : `${profile.name}:${id}`;
+  const prefix = managedPrefix(profile);
+  return prefix ? `${prefix}${id}` : id;
 }
 
 export function isManaged(id: string, profile: ProviderProfile = NVIDIA_PROFILE): boolean {
@@ -65,11 +80,37 @@ export function managedEntry(id: string, profile: ProviderProfile = NVIDIA_PROFI
 
 /** Entradas do perfil, sempre com o model-id sem o namespace no resultado. */
 export function allManaged(profile: ProviderProfile = NVIDIA_PROFILE): Array<[string, ManagedEntry]> {
-  const prefix = `${profile.name}:`;
-  return Object.entries(load())
-    .filter(([id]) => (profile.name === "nvidia" ? !/^[a-z0-9]+:/i.test(id) : id.startsWith(prefix)))
-    .map(([id, entry]): [string, ManagedEntry] => [profile.name === "nvidia" ? id : id.slice(prefix.length), entry])
+  const prefix = managedPrefix(profile);
+  const entries = Object.entries(load());
+  if (prefix === null) {
+    // NVIDIA legado: chaves sem prefixo "nome:"
+    return entries
+      .filter(([id]) => !/^[a-z0-9]+:/i.test(id))
+      .map(([id, entry]): [string, ManagedEntry] => [id, entry])
+      .sort(([a], [b]) => a.localeCompare(b));
+  }
+  return entries
+    .filter(([id]) => id.startsWith(prefix))
+    .map(([id, entry]): [string, ManagedEntry] => [id.slice(prefix.length), entry])
     .sort(([a], [b]) => a.localeCompare(b));
+}
+
+/**
+ * IDs gerenciados do perfil, já normalizados (k3_1-pro ≡ k3.1-pro).
+ * A comparação normalizada é a mesma usada em toda a lógica de diff — evita
+ * que o mesmo modelo apareça como "gerenciado" num comando e "manual" noutro.
+ */
+export function managedIdSet(profile: ProviderProfile = NVIDIA_PROFILE): Set<string> {
+  return new Set(allManaged(profile).map(([id]) => normKey(id)));
+}
+
+/** managedIdSet + nome base da entrada, para exibir a proveniência. */
+export function managedByNormKey(
+  profile: ProviderProfile = NVIDIA_PROFILE
+): Map<string, { id: string; entry: ManagedEntry }> {
+  const out = new Map<string, { id: string; entry: ManagedEntry }>();
+  for (const [id, entry] of allManaged(profile)) out.set(normKey(id), { id, entry });
+  return out;
 }
 
 /** Registra/atualiza a entrada de um modelo gerenciado. */
@@ -98,6 +139,24 @@ export function unrecordManaged(id: string, profile: ProviderProfile = NVIDIA_PR
     delete m[key];
     save(m);
   }
+}
+
+/**
+ * Apaga TODAS as entradas de um perfil (usado pelo uninstall de provider).
+ * Entradas de outros providers não são tocadas.
+ */
+export function clearManaged(profile: ProviderProfile = NVIDIA_PROFILE): number {
+  const m = load();
+  const prefix = managedPrefix(profile);
+  let n = 0;
+  for (const key of Object.keys(m)) {
+    const belongs = prefix === null ? !/^[a-z0-9]+:/i.test(key) : key.startsWith(prefix);
+    if (!belongs) continue;
+    delete m[key];
+    n++;
+  }
+  if (n > 0) save(m);
+  return n;
 }
 
 /** Semeia entradas sem sobrescrever registros existentes. */

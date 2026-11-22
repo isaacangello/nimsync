@@ -3,7 +3,8 @@
 // exit 0 sempre.
 
 import { readConfig, configuredNames } from "../core/config";
-import { allManaged, hasMarker } from "../core/managed";
+import { managedByNormKey, hasMarker } from "../core/managed";
+import { normKey } from "../core/normalize";
 import type { CliOptions } from "../types";
 
 const C = { reset: "\x1b[0m", dim: "\x1b[2m", cyan: "\x1b[36m", green: "\x1b[32m", bold: "\x1b[1m" };
@@ -16,10 +17,11 @@ function fmtDate(iso: string): string {
 export async function runList(opts: CliOptions): Promise<number> {
   const cfg = readConfig(opts.config ?? `${process.env.HOME}/.config/opencode/opencode.jsonc`, opts.provider, opts.profile);
   const names = configuredNames(cfg);
-  const managed = new Map(allManaged(cfg.profile));
+  // comparação normalizada: k3_1-pro na proveniência ≡ k3.1-pro na config
+  const managed = managedByNormKey(cfg.profile);
 
   const rows = Object.entries(names).map(([id, name]) => {
-    const m = managed.get(id);
+    const m = managed.get(normKey(id));
     return { id, name, m };
   });
   rows.sort((a, b) => (b.m ? 1 : 0) - (a.m ? 1 : 0) || a.id.localeCompare(b.id));
@@ -34,9 +36,9 @@ export async function runList(opts: CliOptions): Promise<number> {
 
   for (const r of rows) {
     if (r.m) {
-      const via = r.m.via === "add" ? "nimsync" : "migração";
+      const via = r.m.entry.via === "add" ? "nimsync" : "migração";
       console.log(
-        `  ${C.cyan}✦${C.reset} ${r.name}${C.dim}  (${r.id}) — ${via} ${r.m.version} em ${fmtDate(r.m.addedAt)}${C.reset}`
+        `  ${C.cyan}✦${C.reset} ${r.name}${C.dim}  (${r.id}) — ${via} ${r.m.entry.version} em ${fmtDate(r.m.entry.addedAt)}${C.reset}`
       );
     } else {
       console.log(`  ${C.dim}·${C.reset} ${r.name} ${C.dim}(${r.id}) — manual/fora do registro${C.reset}`);
@@ -44,10 +46,11 @@ export async function runList(opts: CliOptions): Promise<number> {
   }
 
   const marked = rows.filter((r) => hasMarker(r.name, cfg.profile)).length;
+  const managedRows = rows.filter((r) => r.m).length;
   console.log(
-    `\n  ${C.green}${managed.size}${C.reset} gerenciado(s) neste provider · ${marked} com o marcador "${C.cyan}${cfg.profile.marker.trim()}${C.reset}" no /models do OpenCode`
+    `\n  ${C.green}${managedRows}${C.reset} gerenciado(s) neste provider · ${marked} com o marcador "${C.cyan}${cfg.profile.marker.trim()}${C.reset}" no /models do OpenCode`
   );
-  if (marked < managed.size) {
+  if (marked < managedRows) {
     console.log(`  ${C.dim}→ rode nimsync update para marcar os que faltam${C.reset}`);
   }
   return 0;

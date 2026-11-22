@@ -9,7 +9,8 @@ import { applyEdits, modify, parse, type FormattingOptions } from "jsonc-parser"
 import { copyFileSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { addMarker, recordManaged, unrecordManaged } from "./managed";
-import { inferProfile, NVIDIA_PROFILE, type ProfileName, type ProviderProfile } from "./profile";
+import { NVIDIA_PROFILE, type ProfileName, type ProviderProfile } from "./profile";
+import { resolveProfile } from "./resolve";
 
 export interface OpencodeConfig {
   path: string;
@@ -61,7 +62,7 @@ export function readConfig(
   if (!data || typeof data !== "object") {
     throw new Error(`não consegui parsear ${path} como JSONC`);
   }
-  const profile = inferProfile(preferredProviderId, profileName);
+  const profile = resolveProfile(preferredProviderId, profileName);
   const warnings: string[] = [];
   const provider = findProvider(data, preferredProviderId, profile);
   if (!provider) {
@@ -306,6 +307,164 @@ export function previewEdits(cfg: OpencodeConfig, adds: AddSpec[], removes: stri
     text = applyEdits(text, modify(text, [...modelsPath, spec.id], def, { formattingOptions: FORMATTING }));
   }
   return text;
+}
+
+// ---------- atualização de metadados (refresh-meta) ----------
+
+/** Mudança de metadados de um modelo já configurado. */
+export interface MetaUpdate {
+  id: string;
+  limit?: { context?: number; output?: number };
+  variants?: string[];
+}
+
+export interface MetaUpdateResult {
+  backup: string;
+  updated: string[];
+}
+
+/**
+ * Aplica mudanças de metadados (limit.context/output e variants) nos modelos
+ * já configurados. NUNCA toca em `name` (renomeação manual é respeitada) nem
+ * em `settings` (chave por modelo). Uma escrita, um backup, validação campo a
+ * campo e rollback automático.
+ */
+export function applyMetaUpdates(
+  path: string,
+  cfg: OpencodeConfig,
+  updates: MetaUpdate[]
+): MetaUpdateResult | null {
+  if (updates.length === 0) return null;
+  const backup = makeBackup(path);
+  let text = cfg.text;
+  const modelsPath = ["providers", cfg.providerId, "models"];
+  for (const u of updates) {
+    if (u.limit) {
+      const edits = modify(text, [...modelsPath, u.id, "limit"], u.limit, { formattingOptions: FORMATTING });
+      text = applyEdits(text, edits);
+    }
+    if (u.variants) {
+      const variants = u.variants.map((v) => ({ id: v, body: { reasoning_effort: v } }));
+      const edits = modify(text, [...modelsPath, u.id, "variants"], variants, { formattingOptions: FORMATTING });
+      text = applyEdits(text, edits);
+    }
+  }
+  // validação: parseia e confere os campos tocados
+  const after = parse(text) as Record<string, unknown> | undefined;
+  const modelsAfter = (after?.providers as Record<string, {
+    models?: Record<string, { limit?: { context?: number; output?: number }; variants?: Array<{ id: string }> }>;
+  }>)?.[cfg.providerId]?.models;
+  const problems: string[] = [];
+  if (!after || !modelsAfter) {
+    problems.push("JSONC resultante não parseou");
+  } else {
+    for (const u of updates) {
+      const m = modelsAfter[u.id];
+      if (!m) {
+        problems.push(`${u.id} sumiu da config`);
+        continue;
+      }
+      if (u.limit) {
+        if (u.limit.context != null && m.limit?.context !== u.limit.context) {
+          problems.push(`${u.id}: limit.context não atualizou`);
+        }
+        if (u.limit.output != null && m.limit?.output !== u.limit.output) {
+          problems.push(`${u.id}: limit.output não atualizou`);
+        }
+      }
+      if (u.variants) {
+        const got = (m.variants ?? []).map((v) => v.id).join(",");
+        if (got !== u.variants.join(",")) problems.push(`${u.id}: variants não atualizaram`);
+      }
+    }
+  }
+  if (problems.length > 0) {
+    renameSync(backup, path);
+    throw new Error(`validação dos metadados falhou (${problems.join("; ")}) — config restaurada do backup`);
+  }
+  writeFileSync(path, text);
+  return { backup, updated: updates.map((u) => u.id) };
+}
+
+// ---------- restauração de backup (restore/reset) ----------
+
+export interface RestoreResult {
+  backup: string;
+  restoredFrom: string;
+  safetyBackup: string;
+}
+
+/**
+ * Restaura a config a partir de um backup. Antes de sobrescrever, cria um
+ * backup do estado ATUAL (o restore é reversível). Valida o backup antes e o
+ * resultado depois; em qualquer problema, volta o estado atual.
+ */
+export function restoreBackup(path: string, backupPath: string): RestoreResult {
+  let backupText: string;
+  try {
+    backupText = readFileSync(backupPath, "utf8");
+  } catch {
+    throw new Error(`não consegui ler o backup ${backupPath}`);
+  }
+  const parsed = parse(backupText) as Record<string, unknown> | undefined;
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error(`backup inválido (não parseia como JSONC): ${backupPath}`);
+  }
+  if (!("providers" in parsed)) {
+    throw new Error(`backup sem a chave "providers" — não parece uma config do OpenCode: ${backupPath}`);
+  }
+  // backup de segurança do estado atual (permite desfazer o restore)
+  const safety = makeBackup(path);
+  try {
+    writeFileSync(path, backupText);
+  } catch (err) {
+    throw new Error(`falha ao escrever: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  // validação pós-restauração
+  const after = parse(readFileSync(path, "utf8")) as Record<string, unknown> | undefined;
+  if (!after || typeof after !== "object" || !("providers" in after)) {
+    renameSync(safety, path); // rollback: volta o estado atual
+    throw new Error("config restaurada não parseou — estado anterior recolocado");
+  }
+  return { backup: backupPath, restoredFrom: backupPath, safetyBackup: safety };
+}
+
+// ---------- remoção de provider (uninstall) ----------
+
+export interface ProviderRemovalResult {
+  backup: string;
+  removed: string;
+  modelCount: number;
+}
+
+/**
+ * Remove o bloco `providers.<id>` da config, preservando o resto byte a byte.
+ * Backup + validação + rollback automático.
+ */
+export function removeProviderBlock(
+  path: string,
+  providerId: string
+): ProviderRemovalResult | null {
+  const text = readFileSync(path, "utf8");
+  const data = parse(text) as Record<string, unknown> | undefined;
+  if (!data || typeof data !== "object") throw new Error(`não consegui parsear ${path} como JSONC`);
+  const providers = data.providers as Record<string, { models?: Record<string, unknown> }> | undefined;
+  if (!providers?.[providerId]) return null;
+  const modelCount = Object.keys(providers[providerId].models ?? {}).length;
+
+  const backup = makeBackup(path);
+  const after = applyEdits(
+    text,
+    modify(text, ["providers", providerId], undefined, { formattingOptions: FORMATTING })
+  );
+  const parsed = parse(after) as Record<string, unknown> | undefined;
+  const remaining = (parsed?.providers as Record<string, unknown> | undefined) ?? {};
+  if (!parsed || providerId in remaining) {
+    renameSync(backup, path);
+    throw new Error(`validação da remoção falhou (${providerId} ainda presente) — config restaurada do backup`);
+  }
+  writeFileSync(path, after);
+  return { backup, removed: providerId, modelCount };
 }
 
 export function configDisplayName(path: string): string {

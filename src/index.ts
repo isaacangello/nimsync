@@ -25,6 +25,11 @@ COMANDOS
   init            cria o provider no opencode.jsonc (+ wizard se nada configurado)
   check           relatório de TODOS os providers configurados (exit 1 = pendências)
   update          aplica mudanças num provider (backup automático + rollback)
+  add <id...>     adiciona modelo(s) por ID (sonda antes; usa metadados do models.dev)
+  remove <id...>  remove modelo(s) da config (por ID, vivo ou morto)
+  refresh-meta    atualiza limites/variantes dos modelos já configurados
+  restore         volta a um backup .bak-nimsync-<ts> (alias: reset)
+  uninstall       remove um provider da config (+ proveniência e perfil custom)
   list            modelos configurados com origem (offline; não escreve)
   doctor          request mínima para cada modelo configurado (chave, latência, rota)
 
@@ -43,10 +48,22 @@ FLAGS
   --refresh          ignora cache (6h) das fontes
   --include-paid     incluir modelos PAGOS como candidatos (freemium; nunca é default)
   --yes              aceita defaults sem perguntar (update: remove mortos; adiciona só com --all)
-  --all              adiciona todos os novos elegíveis (update)
-  --dry-run          mostra o plano/prévia sem escrever (init/update)
-  --json             saída estruturada (providers/init/check/update)
+  --all              adiciona todos os novos elegíveis (update) · refresh-meta: inclui manuais
+  --dry-run          mostra o plano/prévia sem escrever (init/update/add/remove/refresh-meta)
+  --json             saída estruturada (providers/init/check/update/add/remove/restore/uninstall)
   --timeout-ms <n>   timeout por request (sondagens/doctor; default do doctor: 60000)
+  --no-probe         não sonda (add: adiciona sem confirmar que o modelo responde)
+  --allow-lower      refresh-meta: permite REDUZIR limites (por padrão só amplia)
+  --backup <id>      restore: timestamp do backup (ex: 20261119175252) ou caminho
+  --latest           restore: usa o backup mais recente
+  --list             restore: só lista os backups disponíveis
+
+CRUD DE MODELOS
+  nimsync add <id...>      adiciona por ID (sonda obrigatória; --no-probe pula)
+  nimsync remove <id...>   remove por ID (qualquer modelo configurado)
+  nimsync refresh-meta     recalcula limit.context/output e variants (mostra o diff)
+  nimsync restore --list   lista backups · --latest restaura o mais recente
+  nimsync uninstall --provider <id>   remove o bloco do provider (config + estado)
 
 INIT CUSTOM (qualquer gateway OpenAI-compatible)
   nimsync init --profile custom --provider meugateway \\
@@ -63,12 +80,28 @@ FONTES DE DADOS
 Versão semântica: https://semver.org/lang/pt-BR/
 `;
 
-function parseArgs(argv: string[]): { command?: string; opts: CliOptions; help: boolean; version: boolean } {
+function parseArgs(argv: string[]): {
+  command?: string;
+  args: string[];
+  opts: CliOptions;
+  help: boolean;
+  version: boolean;
+} {
   const opts: CliOptions = {};
+  const args: string[] = [];
   let command: string | undefined;
   let help = false;
   let version = false;
-  const flagsWithArg = new Set(["--config", "--provider", "--profile", "--timeout-ms", "--base-url", "--key-env", "--marker"]);
+  const flagsWithArg = new Set([
+    "--config",
+    "--provider",
+    "--profile",
+    "--timeout-ms",
+    "--base-url",
+    "--key-env",
+    "--marker",
+    "--backup",
+  ]);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-h" || a === "--help") help = true;
@@ -81,6 +114,9 @@ function parseArgs(argv: string[]): { command?: string; opts: CliOptions; help: 
     else if (a === "--restart") opts.restart = true;
     else if (a === "--no-probe") opts.noProbe = true;
     else if (a === "--include-paid") opts.includePaid = true;
+    else if (a === "--latest") opts.latest = true;
+    else if (a === "--list") opts.listOnly = true;
+    else if (a === "--allow-lower") opts.allowLower = true;
     else if (flagsWithArg.has(a)) {
       const value = argv[++i];
       if (!value) throw new Error(`${a} exige um valor`);
@@ -89,6 +125,7 @@ function parseArgs(argv: string[]): { command?: string; opts: CliOptions; help: 
       else if (a === "--base-url") opts.baseUrl = value;
       else if (a === "--key-env") opts.keyEnv = value;
       else if (a === "--marker") opts.marker = value;
+      else if (a === "--backup") opts.backup = value;
       else if (a === "--timeout-ms") {
         const timeout = Number(value);
         if (!Number.isFinite(timeout) || timeout <= 0) throw new Error("--timeout-ms deve ser um número positivo");
@@ -100,14 +137,14 @@ function parseArgs(argv: string[]): { command?: string; opts: CliOptions; help: 
         opts.profile = value;
       }
     } else if (!a.startsWith("-") && !command) command = a;
-    else if (a.startsWith("-")) throw new Error(`flag desconhecida: ${a} (nimsync --help)`);
-    else throw new Error(`argumento inesperado: ${a}`);
+    else if (!a.startsWith("-")) args.push(a);
+    else throw new Error(`flag desconhecida: ${a} (nimsync --help)`);
   }
-  return { command, opts, help, version };
+  return { command, args, opts, help, version };
 }
 
 async function main(): Promise<number> {
-  const { command, opts, help, version } = parseArgs(process.argv.slice(2));
+  const { command, args, opts, help, version } = parseArgs(process.argv.slice(2));
   if (version) {
     console.log(VERSION);
     return 0;
@@ -117,6 +154,8 @@ async function main(): Promise<number> {
     return 0;
   }
   const cmd = command ?? "tui";
+  // add/remove recebem IDs como posicionais: nimsync add <id> [<id>...]
+  if (cmd === "add" || cmd === "remove") opts.modelIds = args;
   switch (cmd) {
     case "providers":
       return await import("./cli/providers").then((m) => m.runProviders(opts));
@@ -130,6 +169,17 @@ async function main(): Promise<number> {
       return await import("./cli/update").then((m) => m.runUpdate(opts));
     case "doctor":
       return await import("./cli/doctor").then((m) => m.runDoctor(opts));
+    case "add":
+      return await import("./cli/add").then((m) => m.runAdd(opts));
+    case "remove":
+      return await import("./cli/remove").then((m) => m.runRemove(opts));
+    case "refresh-meta":
+      return await import("./cli/refresh").then((m) => m.runRefreshMeta(opts));
+    case "restore":
+    case "reset":
+      return await import("./cli/restore").then((m) => m.runRestore(opts));
+    case "uninstall":
+      return await import("./cli/uninstall").then((m) => m.runUninstall(opts));
     case "tui":
       return await import("./tui/app").then((m) => m.runTui(opts));
     default:

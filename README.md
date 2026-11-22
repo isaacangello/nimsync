@@ -65,11 +65,20 @@ ln -sf "$(pwd)/src/index.ts" ~/.local/bin/nimsync   # global command
 | `nimsync update --provider <id> --yes --all` | Removes dead models + adds all eligible new chat models | yes, with backup |
 | `nimsync update --provider <id> --yes` | Conservative: only removes confirmed dead models | yes, with backup |
 | `nimsync update --provider <id> --dry-run` | Previews the resulting configuration | no |
+| `nimsync add <id...>` | Adds model(s) **by ID** (probe first; metadata from models.dev) | yes, with backup |
+| `nimsync remove <id...>` | Removes model(s) **by ID** (alive or dead) and clears their provenance | yes, with backup |
+| `nimsync refresh-meta` | Updates `limit.context/output` and `variants` of configured models | yes, with backup |
+| `nimsync restore --list` | Lists the `.bak-nimsync-<ts>` backups (date, size, model counts) | no |
+| `nimsync restore --latest` | Restores a backup (a safety backup of the current state is created first) | yes, with backup |
+| `nimsync reset` | Alias of `restore` | yes, with backup |
+| `nimsync uninstall --provider <id>` | Removes a provider block + its provenance (and unregisters a custom profile) | yes, with backup |
 | `nimsync list` | Shows configured model provenance and markers | no |
 | `nimsync doctor` | Minimal request per configured model (key, latency, route/alias) | no |
 | `nimsync-stats` | GitHub release downloads, repository stars/forks, and AUR adoption metrics | no |
 
-Flags: `--profile <nvidia|google|groq|openrouter|aihubmix|custom>` · `--config <path>` · `--provider <id>` · `--refresh` · `--include-paid` · `--json` · `--dry-run` · `--yes` · `--all` · `--timeout-ms <n>`. The default profile is `nvidia`; `--provider <id>` also infers the profile automatically.
+Flags: `--profile <nvidia|google|groq|openrouter|aihubmix|custom>` · `--config <path>` · `--provider <id>` · `--refresh` · `--include-paid` · `--json` · `--dry-run` · `--yes` · `--all` · `--no-probe` · `--allow-lower` · `--timeout-ms <n>` · `--backup <id>` · `--latest` · `--list`. The default profile is `nvidia`; `--provider <id>` also infers the profile automatically.
+
+> `--json` always prints the **plan** and never writes; use `--yes` to apply without the interactive prompt.
 
 ### Getting started (free first)
 
@@ -121,6 +130,38 @@ nimsync init --profile custom \
 
 Custom profiles are stored in `~/.local/state/nimsync/profiles.json`, are treated as `paid` (opt-in only), and show up in `nimsync providers`, `nimsync check` and `nimsync update` like any built-in provider.
 
+### Manual CRUD (by ID)
+
+`update` only offers what it *discovered* in the catalog and only removes models it *proved* are dead. The commands below give you direct control:
+
+```bash
+# add by ID — the probe must confirm the route (404/410 = refused, timeout = refused)
+nimsync add fastino/gliner2-pii --provider nvidia-nim
+nimsync add fastino/gliner2-pii --provider nvidia-nim --no-probe   # emergency: no probe, no key needed
+
+# remove by ID — alive or dead; provenance is cleared so it can be offered again
+nimsync remove moonshotai/kimi-k3.1-pro --provider nvidia-nim
+
+# refresh metadata — limits and reasoning variants, never the name you typed
+nimsync refresh-meta --provider nvidia-nim                 # diff first, then confirmation
+nimsync refresh-meta --provider nvidia-nim --allow-lower   # also allow shrinking limits
+
+# restore — go back to a previous backup (reversible: the current state is backed up first)
+nimsync restore --list
+nimsync restore --latest
+
+# uninstall a whole provider (config block + provenance + custom profile)
+nimsync uninstall --provider aihubmix
+```
+
+Rules baked into these commands:
+
+- `add` probes first: `404/410` = refused, timeout/queue = refused ("run it again"), `403 insufficient balance` = added with a warning (you asked for that ID explicitly), `429` = added (alive, quota-limited).
+- `remove` never touches models you did not name; models outside the provenance registry are flagged as *manual* before removal.
+- `refresh-meta` only ever touches `limit.context`, `limit.output` and `variants`. Manual renames and per-model `settings` (credentials) are left alone, and limits are only **raised** unless you pass `--allow-lower`.
+- `restore` validates that the backup parses and has a `providers` key; if anything is off, the current state is put back.
+- `uninstall` never touches your API key in `~/.zshrc` — that stays yours.
+
 ### Adoption and download statistics
 
 Run `nimsync-stats` for a report of GitHub release downloads (total and per asset), repository stars/forks, and AUR votes/popularity/out-of-date status. Use `nimsync-stats --watch` to refresh every 60 seconds. This command requires `gh` (GitHub CLI), `jq`, and `curl`.
@@ -158,7 +199,9 @@ See `nimsync-stats` above.
 - `update` only changes the `models` map of the selected provider.
 - Probe before removal: a model that still responds is not removed.
 - Timeouts and rate limits never remove anything.
-- Per-provider provenance in `~/.local/state/nimsync/managed.json` (`aihubmix:<id>`; legacy NVIDIA entries remain unprefixed); custom profiles in `~/.local/state/nimsync/profiles.json`.
+- `restore` is itself reversible: the current state is backed up before the old file is put back.
+- `uninstall` removes the provider block, its provenance and (for custom profiles) the registration — never your API key.
+- Per-provider provenance in `~/.local/state/nimsync/managed.json` (`aihubmix:<id>`; legacy NVIDIA entries remain unprefixed; custom providers use `custom:<provider-id>:<id>`); custom profiles in `~/.local/state/nimsync/profiles.json`.
 
 ## Releases and versioning
 
@@ -194,9 +237,9 @@ Engineering notes:
 
 - [x] AUR package (`nimsync-bin`, binaries from GitHub Releases)
 - [x] Multi-provider manager (free first: Google AI Studio, Groq, OpenRouter, custom gateways)
+- [x] Full CRUD by ID (`add`, `remove`, `refresh-meta`, `restore`/`reset`, `uninstall`)
 - [ ] GitHub Actions for automated releases on tag push
 - [ ] Weekly systemd timer with pending-change notifications
-- [ ] `--refresh-meta` to update limits of already configured models
 
 ## License
 

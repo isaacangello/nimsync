@@ -4,7 +4,8 @@
 
 import { formatReport, loadContext, loadContextAll, C } from "../core/context";
 import { readConfig, configuredModels } from "../core/config";
-import { allManaged } from "../core/managed";
+import { managedIdSet } from "../core/managed";
+import { normKey } from "../core/normalize";
 import { addableRows, removableRows, deprecatingConfigured } from "../types";
 import type { CliOptions } from "../types";
 
@@ -92,8 +93,8 @@ function printSingleReport(
   try {
     const cfg = readConfig(opts.config ?? `${process.env.HOME}/.config/opencode/opencode.jsonc`, ctx.providerId, ctx.profile.name);
     const configured = configuredModels(cfg);
-    const managedIds = new Set(allManaged(ctx.profile).map(([id]) => id));
-    const managedConfigured = configured.filter((id) => managedIds.has(id)).length;
+    const managedIds = managedIdSet(ctx.profile);
+    const managedConfigured = configured.filter((id) => managedIds.has(normKey(id))).length;
     console.log(
       `  ${C.dim}${managedConfigured}/${configured.length} configurados gerenciados pelo nimsync (nimsync list --provider ${ctx.providerId})${C.reset}`
     );

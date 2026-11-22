@@ -13,7 +13,8 @@ import { stdin, stdout } from "node:process";
 import { readFileSync } from "node:fs";
 import { parse } from "jsonc-parser";
 import { defaultConfigPath, initProvider, previewProviderInit } from "../core/config";
-import { allProfiles, customProfileFromDef, inferProfile, type CustomProfileDef, type ProviderProfile } from "../core/profile";
+import { allProfiles, customProfileFromDef, type CustomProfileDef, type ProviderProfile } from "../core/profile";
+import { resolveProfile } from "../core/resolve";
 import { allCustomProfiles, saveCustomProfile } from "../core/managed";
 import { resolveEnv } from "../core/env";
 import { C } from "../core/context";
@@ -32,7 +33,7 @@ export async function runInit(opts: CliOptions): Promise<number> {
 
   // ---- perfil explícito (ou inferido por --provider)
   if (opts.profile || opts.provider) {
-    const profile = inferProfile(opts.provider, opts.profile);
+    const profile = resolveProfile(opts.provider, opts.profile);
     return initExplicit(opts, profile, opts.provider ?? profile.providerId);
   }
 

@@ -115,4 +115,14 @@ export interface CliOptions {
   keyEnv?: string;
   /** init --profile custom: marcador de exibição (default: derivado do provider id) */
   marker?: string;
+  /** add/remove: IDs de modelo operados manualmente */
+  modelIds?: string[];
+  /** restore: id do backup (timestamp) ou caminho do arquivo */
+  backup?: string;
+  /** restore: usa o backup mais recente */
+  latest?: boolean;
+  /** restore --list: só lista os backups */
+  listOnly?: boolean;
+  /** refresh-meta: permite REDUZIR limites (por padrão só amplia) */
+  allowLower?: boolean;
 }

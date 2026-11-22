@@ -4,11 +4,12 @@
 import { readFileSync } from "node:fs";
 import { parse } from "jsonc-parser";
 import { resolveEnv } from "../core/env";
-import { allManaged } from "../core/managed";
+import { managedIdSet } from "../core/managed";
 import { allCustomProfiles } from "../core/managed";
 import { allProfiles, tierOrder } from "../core/profile";
 import type { ProviderProfile } from "../core/profile";
 import { defaultConfigPath } from "../core/config";
+import { normKey } from "../core/normalize";
 import { C } from "../core/context";
 import type { CliOptions } from "../types";
 
@@ -47,7 +48,7 @@ function statusOf(profile: ProviderProfile, providers: ReturnType<typeof readPro
   }
   const keyEnvFound = profile.envKeys.find((k) => resolveEnv(k));
   const configured = configProviderId ? Object.keys(providers[configProviderId]?.models ?? {}) : [];
-  const managedIds = new Set(allManaged(profile).map(([id]) => id));
+  const managedIds = managedIdSet(profile);
   return {
     profile,
     inConfig: Boolean(configProviderId),
@@ -55,7 +56,7 @@ function statusOf(profile: ProviderProfile, providers: ReturnType<typeof readPro
     keyFound: Boolean(keyEnvFound),
     keyEnvFound,
     modelsTotal: configured.length,
-    modelsManaged: configured.filter((id) => managedIds.has(id)).length,
+    modelsManaged: configured.filter((id) => managedIds.has(normKey(id))).length,
     custom,
   };
 }
