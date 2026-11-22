@@ -4,10 +4,23 @@
 
 ## [Não lançado]
 
-### Adicionado
+## [0.5.0] - 2026-11-22
 
-- Comando `nimsync-stats` com downloads do GitHub Releases (total e por asset), stars/forks do repositório, votos/popularidade/out-of-date no AUR e modo `--watch` com atualização a cada 60 segundos
+### Added
+
+- Gerenciador multi-provider com a filosofia grátis primeiro: Google AI Studio, Groq, OpenRouter e gateways custom OpenAI-compatible
+- Novo painel `nimsync providers` com tier, chave detectada e estado da configuração
+- `nimsync check` sem `--profile` agora itera todos os providers configurados, grátis primeiro
+- `nimsync init` sem flags roda um wizard de onboarding grátis primeiro com instruções passo a passo da chave
+- Opt-in `--include-paid` nos provedores freemium e toggle `p` na TUI, com candidatos pagos marcados com `[$]`
+- Novo veredito `alive-quota` (HTTP 429 significa vivo, mas com cota/rate-limit) que nunca remove um modelo
+- Perfis custom registrados por `init --profile custom` e guardados em `~/.local/state/nimsync/profiles.json`
+- Comando `nimsync-stats` com downloads do GitHub Releases, stars/forks do repositório, métricas de adoção no AUR e modo `--watch` com atualização a cada 60 segundos
 - Metadados do pacote npm e workflow do GitHub Actions disparado por tags `v*.*.*`, validando e publicando o pacote com provenance usando `NPM_TOKEN`
+### Fixed
+
+- O wizard de onboarding e os prompts interativos não travam mais quando o stdin fecha (EOF encerra graciosamente)
+- O script de release agora atualiza os dois changelogs e publica notas de release bilíngues
 
 ## [0.4.0] - 2026-11-19
 

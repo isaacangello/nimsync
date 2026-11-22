@@ -1,6 +1,6 @@
 {
   "name": "nimsync",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Sync NVIDIA NIM and free AIHubMix models with the OpenCode model whitelist",
   "type": "module",
   "license": "MIT",
